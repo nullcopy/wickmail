@@ -4,8 +4,9 @@ Alias service, lease policy engine, and management API for Wickmail.
 
 Scope:
 
-- Alias and lease data model
+- Readable random alias generation and lease data model
 - Effective-state evaluation
+- Alias list filtering, sorting, and management
 - Inbound delivery decisions and quarantine routing
 - Authenticated outbound ownership checks and renewal
 - Management API used by the web and Android clients

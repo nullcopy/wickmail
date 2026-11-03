@@ -6,6 +6,7 @@ Provide conventional email hosting with programmable, expiring aliases. An alias
 
 The server must:
 
+- Generate readable random alias addresses with separately stored expiration settings.
 - Deliver mail from active aliases normally.
 - Quarantine mail sent to expired aliases.
 - Renew aliases based on authenticated user activity.
@@ -78,7 +79,7 @@ Each alias contains:
 | Field | Description |
 |---|---|
 | ID | Stable internal UUID |
-| Address | Unique full email address |
+| Address | Unique full email address with a readable random local part |
 | Label | User-facing name, such as "Example Store" |
 | Purpose | Optional order, merchant, or notes field |
 | Created at | Creation timestamp |
@@ -86,11 +87,13 @@ Each alias contains:
 | Disabled at | Nullable; disabled overrides lease state |
 | Lease duration | Default renewal duration |
 | Renew on outbound | Whether authenticated sending renews the lease |
-| Last inbound at | Informational only |
+| Last inbound at | Most recent accepted inbound mail; informational only |
 | Last user activity at | Last outbound, renewal, or recovery action |
 | Policy version | Optimistic concurrency control |
 
-The local part may contain a readable prefix and random token, but the address string is not authoritative policy. Changing a lease must not require changing the address.
+The server generates local parts by randomly selecting common lowercase dictionary words, with two words separated by a dot by default, such as `green.farm`. Word lists avoid offensive terms, homophones, and unnecessarily long or difficult words. Selection uses a cryptographically secure random number generator, and the server enforces uniqueness and retries with a new combination or an additional word on collision. Addresses contain no labels, merchant identifiers, timestamps, lease durations, ownership information, or other policy. Clients cannot choose a local part. The database is the sole source of truth for expiry and behavior, and changing policy never changes the address. Addresses are identifiers, not secrets; no security control depends on their being unguessable.
+
+For "recently used" sorting, the last-used time is the later of `last_inbound_at` and `last_user_activity_at`. Aliases with neither timestamp use their creation time for this sort. Management-only edits, such as changing a label, do not count as use.
 
 Alias addresses must never be reassigned to a different purpose or owner. v1 provides disable/archive rather than hard deletion.
 
@@ -117,9 +120,12 @@ All timestamps are stored and evaluated in UTC.
 
 ### Creation
 
+- The app requests an alias with a chosen lease or absolute expiration time.
+- The server generates the readable local part from randomly selected dictionary words; clients cannot supply an address or local part.
+- A database uniqueness constraint protects against collisions, and the server regenerates on collision.
 - Default lease: seven days.
 - Supported presets: 24 hours, 7 days, 30 days, custom, and no expiry.
-- Expiry starts at alias creation.
+- Expiry starts at alias creation and is stored separately from the address.
 - The app must create the alias before displaying it as ready to use.
 
 ### Inbound activity
@@ -210,6 +216,16 @@ POST   /v1/aliases/{id}/enable
 GET    /v1/aliases/{id}/events
 ```
 
+`POST /v1/aliases` accepts labels, purposes, lease or expiration settings, and renewal policy. It does not accept a local part or full address. The response contains the server-generated address only after the alias has been stored successfully.
+
+`GET /v1/aliases` supports:
+
+- Filtering by state, expiration window, and presence or absence of expiry
+- Searching labels, purposes, and addresses
+- Sorting by expiration, last used, or creation time
+- Deterministic ordering with no-expiry aliases last for ascending expiration and never-used aliases ordered by creation time for last-used sorting
+- Pagination with a stable secondary sort by alias ID
+
 ### Quarantine operations
 
 ```text
@@ -246,6 +262,9 @@ If alias policy cannot be evaluated, the server must not silently deliver or dis
 
 ## Acceptance criteria
 
+- Generated local parts are unique, readable combinations of randomly selected dictionary words and contain no user-supplied or policy-derived components.
+- Changing expiration or other policy does not change an alias's address.
+- Alias list filtering and sorting handle expiration, no expiry, recent use, and never-used aliases deterministically.
 - Mail to an active alias reaches the inbox.
 - Inbound messages never extend the lease.
 - Mail arriving exactly at or after expiry is quarantined.

@@ -2,7 +2,7 @@
 
 Wickmail is a self-hosted email system with programmable, expiring aliases.
 
-Give a merchant an address like `you.a7f3k9@example.com` with a seven-day lease. Mail is delivered normally while the lease is active. When the lease expires, mail to that address is quarantined instead of reaching your inbox. Sending through the alias, or explicitly renewing it, restarts the lease. Inbound mail never extends its own lease, so a merchant cannot keep an address alive forever by continuing to email it.
+The companion app generates a readable random address like `green.farm@example.com` with a chosen lease, such as seven days. Mail is delivered normally while the lease is active. When the lease expires, mail to that address is quarantined instead of reaching your inbox. Sending through the alias, or explicitly renewing it, restarts the lease. Inbound mail never extends its own lease, so a merchant cannot keep an address alive forever by continuing to email it.
 
 ## Status
 
@@ -10,6 +10,7 @@ Design phase. The repository currently contains the design specification and mon
 
 ## Core rules (v1)
 
+- Alias addresses are readable and randomly generated; they encode no expiry, ownership, or other policy.
 - An alias grants a temporary lease, not a permanent address.
 - Inbound mail never renews a lease.
 - Authenticated outbound mail renews the lease.
@@ -29,14 +30,16 @@ wickmail/
   packages/core/    # shared types, policy rules, API client
   infra/            # deployment, mail config, backup scripts
   docs/design/      # design specifications
+  docs/decisions/   # architecture decision records
 ```
 
-## Design documents
+## Documentation
 
-- [Overview](docs/design/overview.md)
+- [Design overview](docs/design/overview.md)
 - [Mail server](docs/design/mail-server.md)
 - [Web management app](docs/design/web-app.md)
 - [Android WebView shell](docs/design/android.md)
+- [Architecture decision records](docs/decisions/README.md)
 
 ## License
 

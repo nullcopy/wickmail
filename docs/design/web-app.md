@@ -2,22 +2,22 @@
 
 ## Purpose
 
-Provide a responsive interface for creating aliases, managing leases, recovering quarantined mail, and understanding why an alias is in its current state.
+Provide a responsive interface for generating readable random aliases with chosen expiration times, browsing and managing generated aliases, recovering quarantined mail, and understanding why an alias is in its current state.
 
 The app is served from the management API's origin and is reused by the Android shell.
 
 ## Primary user flows
 
-### Create an alias
+### Generate an alias
 
-1. Select **Create alias**.
+1. Select **Generate alias**.
 2. Optionally enter a merchant, order, or purpose.
-3. Select a lease duration.
+3. Select an expiration preset or choose a custom expiration time.
 4. Review renewal behavior.
-5. Create the alias.
-6. Present the completed address with prominent **Copy** and **Share** actions.
+5. Ask the server to generate and store the alias.
+6. Present the returned readable address, such as `green.farm@example.com`, with prominent **Copy** and **Share** actions.
 
-The generated address should only be shown as usable after server creation succeeds.
+The user never enters or edits the local part. The address is randomly assembled from common words and contains no expiration or other policy. The app reads expiry from the API, never from the address, and only shows the alias as usable after server creation succeeds.
 
 ### Reuse an alias for another purchase
 
@@ -47,16 +47,21 @@ No manual action is required if the user sends through their normal email client
 ### Dashboard
 
 - Active, expiring-soon, expired, and quarantined counts
-- Search and status filters
-- Aliases sorted by expiry by default
-- Prominent create button
+- Search by label, purpose, or address
+- Filters for state and expiry: expiring within 24 hours, 7 days, a custom range, or no expiry
+- Sort controls for expiry, recently used, and recently created
+- Expiry sorting shows the soonest expiration first and places aliases without expiry last
+- Recently-used sorting shows the latest inbound or user activity first; aliases with no activity fall back to creation time
+- Expiry is the default sort
+- Prominent generate button
 - Quarantine indicator
 
 Each alias row shows:
 
-- Label and address
+- Label and readable random address
 - State
 - Expiry or "No expiry"
+- Last-used time
 - Renewal behavior
 - Recent quarantined-message count
 
@@ -122,8 +127,12 @@ Show lifecycle events such as:
 
 ## Acceptance criteria
 
-- A user can create and copy a seven-day alias in under a minute.
+- A user can generate and copy a readable seven-day alias, such as `green.farm@example.com`, in under a minute.
+- The app offers no field for choosing the local part and never derives policy from the address.
+- Users can filter aliases by state and expiry and sort them by expiry, recently used, or recently created.
+- Aliases without expiry and aliases that have never been used have deterministic sort positions.
 - A returning user can renew and copy an existing alias in two primary actions.
+- Users can edit labels and purposes, change lease policy, and disable or re-enable aliases.
 - Active, expired, and disabled states are visually unambiguous.
 - The interface explains that inbound mail does not renew an alias.
 - Quarantined mail can be recovered without using an IMAP client.
