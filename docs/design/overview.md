@@ -16,6 +16,7 @@ The motivating scenario is an online purchase: the companion app generates a rea
 - Standard email clients read the mailbox over IMAP and can send mail, but they do not participate in alias identity selection.
 - Expired mail is quarantined for 30 days by default; spam retention is configured separately.
 - The web app is responsive and runs both in browsers and inside the Android WebView.
+- A Nix flake is the canonical build, development, test, and deployment interface. See [ADR 0011](../decisions/0011-nix-flake-first-class.md).
 - All timestamps are stored and evaluated in UTC.
 
 ## Non-goals for v1
@@ -63,11 +64,13 @@ The motivating scenario is an online purchase: the companion app generates a rea
 8. **Owner, not purpose, is permanent.** An alias is never reassigned to a different owner; it may be reused for another purchase from the same merchant or purpose.
 9. **Server-authoritative policy.** Clients consume server-computed state and raw timestamps; they do not duplicate lease evaluation.
 10. **Keep policy out of the mail path.** Arbitrary user code is never executed during SMTP delivery.
+11. **One reproducible toolchain.** A Nix flake builds, tests, and deploys the system, and developers and CI use the same pinned derivations.
 
 ## Repository layout
 
 ```text
 wickmail/
+  flake.nix         # build, development, test, and deployment entry point
   apps/server/      # policy lookup, LMTP proxy, management API
   apps/web/         # responsive management UI and reply composer
   apps/android/     # Android WebView shell
@@ -81,6 +84,7 @@ wickmail/
 
 The highest-risk work is the mail path and the reply path, so v1 starts with a risk-first walking skeleton rather than the management API.
 
+0. **Flake foundation:** a `flake.nix` with pinned inputs, a dev shell, and initial `checks` for formatting and lint, so every later step is built and tested through Nix.
 1. **Walking skeleton:** create alias, receive while active, expire, quarantine, recover without duplication, reply as alias, and renew.
 2. **Failure injection:** policy outage, crash during recovery, retention overlapping recovery, spool exhaustion, and multiple-alias reply selection.
 3. **Management API and web app:** alias generation and management, filtering and sorting, quarantine recovery, and the reply composer.

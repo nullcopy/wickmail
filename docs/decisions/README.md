@@ -26,3 +26,4 @@ Records are numbered sequentially and monotonically. Numbers are never reused. A
 | [0008](0008-alias-native-replies.md) | Reply as an alias from the first-party app | Accepted |
 | [0009](0009-authentication-and-bootstrap.md) | Separate management authentication from mail authentication | Accepted |
 | [0010](0010-sqlite-for-single-user-v1.md) | Use SQLite for single-user v1 | Accepted |
+| [0011](0011-nix-flake-first-class.md) | Make a Nix flake the first-class build, development, and deployment interface | Accepted |

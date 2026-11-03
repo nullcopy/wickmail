@@ -8,6 +8,7 @@ The companion app generates a readable random address like `green.farm@example.c
 
 ```text
 wickmail/
+  flake.nix         # build, development, test, and deployment entry point
   apps/server/      # alias service, policy engine, management API
   apps/web/         # responsive management UI
   apps/android/     # Android WebView shell
@@ -16,6 +17,10 @@ wickmail/
   docs/design/      # design specifications
   docs/decisions/   # architecture decision records
 ```
+
+## Building and development
+
+Wickmail is built, tested, and deployed through a Nix flake. Development uses `nix develop`, checks run with `nix flake check`, and deployment uses the flake's NixOS modules and packages. See [ADR 0011](docs/decisions/0011-nix-flake-first-class.md).
 
 ## Documentation
 
