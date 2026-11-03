@@ -2,7 +2,7 @@
 
 Wickmail is a self-hosted email system with programmable, expiring aliases.
 
-The companion app generates a readable random address like `green.farm@example.com` with a chosen lease, such as seven days. Mail is delivered normally while the lease is active. When the lease expires, mail to that address is quarantined instead of reaching your inbox. Sending through the alias, or explicitly renewing it, restarts the lease. Inbound mail never extends its own lease, so a merchant cannot keep an address alive forever by continuing to email it.
+The companion app generates a readable random address like `green.farm@example.com` with a chosen lease, such as seven days. Mail is delivered normally while the lease is active. When the lease expires, mail to that address is quarantined instead of reaching your inbox. Sending through the alias, or explicitly renewing it, restarts the lease. Inbound mail never extends its own lease, so a merchant cannot keep an address alive forever by continuing to email it. Replies sent from the app use the receiving alias, so your primary address stays private.
 
 ## Repository layout
 
@@ -11,7 +11,7 @@ wickmail/
   apps/server/      # alias service, policy engine, management API
   apps/web/         # responsive management UI
   apps/android/     # Android WebView shell
-  packages/core/    # shared types, policy rules, API client
+  packages/core/    # shared schemas, types, and API client
   infra/            # deployment, mail config, backup scripts
   docs/design/      # design specifications
   docs/decisions/   # architecture decision records

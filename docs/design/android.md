@@ -10,7 +10,7 @@ The Android app is a management client, not an IMAP email client.
 
 The native shell provides:
 
-- A full-screen WebView hosting the management app
+- A full-screen WebView hosting the management app, including the reply composer
 - Android back and forward navigation
 - Connectivity and loading-error handling
 - External-link handling
@@ -19,7 +19,7 @@ The native shell provides:
 - Optional biometric app lock
 - Release-signed updates through the chosen distribution channel
 
-Alias logic, lease enforcement, and quarantine operations remain server-side.
+Alias logic, lease enforcement, reply identity selection, and quarantine operations remain server-side. The native shell does not consume shared policy logic or compute effective state.
 
 ## Navigation behavior
 
@@ -77,7 +77,7 @@ When offline:
 
 - Show a native connectivity error with retry.
 - Do not display a stale alias as newly created or renewed.
-- Do not queue mutations invisibly.
+- Do not queue alias mutations or replies invisibly.
 - Preserve unsent form input locally where practical.
 
 If the session expires, the WebView returns to the normal sign-in flow. Native code must not scrape or retain the user's password.
@@ -85,6 +85,8 @@ If the session expires, the WebView returns to the normal sign-in flow. Native c
 ## Acceptance criteria
 
 - All web management flows work inside the Android app without a separate mobile implementation.
+- Reply-as-alias and multiple-alias identity prompts work inside the WebView.
+- The native shell does not evaluate leases or select reply identities.
 - External links cannot navigate the privileged management WebView to arbitrary origins.
 - Back navigation, session expiry, rotation, and process recreation behave predictably.
 - Alias copy and share actions work on supported Android versions.

@@ -1,14 +1,16 @@
 # wickmail-core
 
-Shared types, policy rules, and API client used by the Wickmail server, web app, and Android shell.
+Shared schemas, types, and API client helpers for Wickmail.
 
 Scope:
 
-- Alias and lease types
-- Effective-state and lease calculation shared by server and clients
+- Alias, lease, message, and provenance types
 - Management API request and response schemas
-- API client helpers
+- API client helpers for the web app
+- Validation of API payloads
 
-See the [design overview](../../docs/design/overview.md).
+`wickmail-core` does not contain lease evaluation or policy rules. The server is authoritative: clients consume server-computed effective state and raw timestamps and never derive expiry, renewal, or routing decisions themselves. The Android shell hosts the web app and does not consume this package.
+
+See the [design overview](../../docs/design/overview.md) and [mail server design](../../docs/design/mail-server.md).
 
 Status: not implemented.

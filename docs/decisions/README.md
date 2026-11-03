@@ -21,3 +21,8 @@ Records are numbered sequentially and monotonically. Numbers are never reused. A
 | [0003](0003-renew-leases-only-through-user-activity.md) | Renew leases only through authenticated user activity | Accepted |
 | [0004](0004-quarantine-mail-for-expired-aliases.md) | Quarantine mail for expired aliases | Accepted |
 | [0005](0005-generate-readable-random-aliases.md) | Generate readable random aliases | Accepted |
+| [0006](0006-mail-path-integration.md) | Integrate mail through a Postfix policy lookup and a Wickmail LMTP proxy | Accepted |
+| [0007](0007-quarantine-source-of-truth.md) | Treat the mail store as the quarantine source of truth | Accepted |
+| [0008](0008-alias-native-replies.md) | Reply as an alias from the first-party app | Accepted |
+| [0009](0009-authentication-and-bootstrap.md) | Separate management authentication from mail authentication | Accepted |
+| [0010](0010-sqlite-for-single-user-v1.md) | Use SQLite for single-user v1 | Accepted |
