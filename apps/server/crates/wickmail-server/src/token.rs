@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::identity::{UserId, hash_secret, random_secret};
+use crate::identity::{UserId, hash_secret, random_hex, random_secret};
 use crate::timestamp::Timestamp;
 
 /// Prefix on every issued API token.
@@ -294,7 +294,7 @@ pub fn issue_token(
     expires_at: Option<Timestamp>,
     now: Timestamp,
 ) -> IssuedToken {
-    let prefix = random_secret(4);
+    let prefix = random_hex(4);
     let secret = random_secret(32);
     let token = format!("{TOKEN_PREFIX}_{prefix}_{secret}");
     let record = ApiToken {
@@ -358,18 +358,23 @@ mod tests {
 
     #[test]
     fn issued_tokens_are_shown_once_and_stored_as_a_hash() {
-        let issued = issue_token(
-            UserId::new(),
-            "ci",
-            ScopeSet::new([Scope::AliasesRead]).unwrap(),
-            None,
-            at("2026-01-01T00:00:00Z"),
-        );
-        assert!(issued.token.starts_with("wmk_"));
-        let (prefix, _secret) = split_token(&issued.token).unwrap();
-        assert_eq!(prefix, issued.record.prefix);
-        assert_eq!(issued.record.token_hash, token_hash(&issued.token));
-        assert!(!issued.record.token_hash.contains(&issued.token));
+        // Issue many tokens so a random prefix that collided with the
+        // underscore separator cannot hide behind a lucky draw.
+        for _ in 0..512 {
+            let issued = issue_token(
+                UserId::new(),
+                "ci",
+                ScopeSet::new([Scope::AliasesRead]).unwrap(),
+                None,
+                at("2026-01-01T00:00:00Z"),
+            );
+            assert!(issued.token.starts_with("wmk_"));
+            let (prefix, secret) = split_token(&issued.token).unwrap();
+            assert_eq!(prefix, issued.record.prefix);
+            assert!(!secret.is_empty());
+            assert_eq!(issued.record.token_hash, token_hash(&issued.token));
+            assert!(!issued.record.token_hash.contains(&issued.token));
+        }
     }
 
     #[test]

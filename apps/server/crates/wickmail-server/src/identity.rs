@@ -382,6 +382,21 @@ pub fn random_secret(bytes: usize) -> String {
     URL_SAFE_NO_PAD.encode(buffer)
 }
 
+/// Generates a fresh random lowercase hex string of `bytes * 2` characters.
+///
+/// Unlike [`random_secret`], the result never contains an underscore, so it is
+/// safe to embed in the underscore-delimited API token format.
+pub fn random_hex(bytes: usize) -> String {
+    let mut buffer = vec![0u8; bytes];
+    getrandom::fill(&mut buffer).expect("operating system randomness is available");
+    let mut out = String::with_capacity(bytes * 2);
+    for byte in buffer {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
 /// Hashes a secret for storage with SHA-256.
 ///
 /// Tokens, session identifiers, setup tokens, and recovery codes are
