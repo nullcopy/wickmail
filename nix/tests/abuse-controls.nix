@@ -67,14 +67,19 @@ let
                 pass
 
 
-    def submission(sender):
+    def submission(sender, recipient):
         client = smtplib.SMTP(SERVER, 587, timeout=30)
         try:
             client.ehlo(DOMAIN)
             code, text = client.mail(sender)
             if code >= 400:
                 return code, text
-            return client.rcpt("recipient@example.net")
+            code, text = client.rcpt(recipient)
+            if code >= 400:
+                return code, text
+            return client.data(
+                "From: " + sender + "\r\nTo: " + recipient + "\r\nSubject: out\r\n\r\nbody"
+            )
         finally:
             try:
                 client.quit()
@@ -111,10 +116,12 @@ let
 
     step("the server is not an open relay")
     code, text = rcpt_only("victim@elsewhere.example")
-    assert code == 554, f"relay attempt was not denied: {code} {text}"
+    # Postfix defers unauthenticated relay with 454 by default and rejects
+    # with 554 when `reject_unauth_destination` is configured; either denies it.
+    assert code in (454, 554), f"relay attempt was not denied: {code} {text}"
 
     step("oversized messages are rejected at DATA")
-    big = "x" * 4096
+    big = "x" * 16384
     code, data_code = deliver(active, big)
     assert code == 250, f"RCPT before DATA: {code}"
     assert data_code == 552, f"oversized message accepted: {data_code}"
@@ -133,9 +140,11 @@ let
     assert inbox_count() == 2, f"expected exactly 2 delivered, got {inbox_count()}"
 
     step("outbound submission is rate limited")
-    code, text = submission(PRIMARY)
+    # Send to the active alias so relay restrictions allow the recipient; the
+    # rate limit is what the test exercises.
+    code, text = submission(PRIMARY, active)
     assert code == 250, f"first submission rejected: {code} {text}"
-    code, text = submission(PRIMARY)
+    code, text = submission(PRIMARY, active)
     assert code in (450, 451, 452), f"second submission was not rate limited: {code} {text}"
 
     step("a full disk returns a temporary failure and raises a disk-full alert")
@@ -151,7 +160,8 @@ let
         if status == "active":
             break
         time.sleep(0.5)
-    code, data_code = deliver(active, "spool me")
+    # A fresh sender so the inbound rate limit does not mask the spool failure.
+    code, data_code = deliver(active, "spool me", sender="full@example.net")
     assert code == 250, f"RCPT while spool is full: {code}"
     # The message is deferred by the proxy and the failure is alerted.
     deadline = time.time() + 20
@@ -188,7 +198,9 @@ pkgs.testers.nixosTest {
       primaryAddress = "user@wickmail.test";
       mailPassword = "secret";
       enableSubmission = true;
-      maxMessageBytes = 1024;
+      # Larger than the delivered small messages (with Postfix headers) and
+      # smaller than the oversized test message.
+      maxMessageBytes = 4096;
       perSenderRate = 2;
       outboundRateLimit = 1;
     };
@@ -202,7 +214,13 @@ pkgs.testers.nixosTest {
       milter_macro_daemon_name = "ORIGINATING";
       smtpd_client_message_rate_limit = "1";
     };
-    services.postfix.settings.main.message_size_limit = pkgs.lib.mkForce 1024;
+    # Postfix enforces the SMTP-visible size limit. A very small limit breaks
+    # the milter, so keep it above the milter's working size and send a larger
+    # message in the test. The server's own limit is unit-tested.
+    services.postfix.settings.main.message_size_limit = pkgs.lib.mkForce 8192;
+    # Do not trust the loopback client, so the relay test exercises the
+    # relay restrictions rather than `permit_mynetworks`.
+    services.postfix.settings.main.mynetworks = pkgs.lib.mkForce [ "127.0.0.2/32" ];
     environment.systemPackages = [
       pkgs.python3
       probe

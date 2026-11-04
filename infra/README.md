@@ -39,7 +39,8 @@ See [mail server design](../docs/design/mail-server.md) and [ADR 0011](../docs/d
     enable = true;
     domain = "example.com";
     primaryAddress = "user@example.com";
-    mailPassword = "change-me";
+    # Required; supply from a secret manager. There is no default.
+    mailPassword = "<generated mail password>";
   };
 }
 ```

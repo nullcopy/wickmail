@@ -85,5 +85,9 @@ nix build .#checks.x86_64-linux.backup-restore
 
 ## Recorded result
 
-See the [release checklist](release-checklist.md) for the recorded drill
-result from the current revision.
+`nix build .#checks.x86_64-linux.backup-restore` passed: the drill delivered
+mail to an active and an expired alias, backed up the database and mail store,
+removed them, restored the archive, and verified that reconciliation repaired
+the missing quarantine body (`deleted=1`). After the restore the account
+authenticated over IMAP, the restored inbox message was present, and the
+active alias still accepted mail.

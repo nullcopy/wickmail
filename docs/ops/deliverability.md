@@ -5,6 +5,7 @@ authenticate and land in inboxes, and describes the verification procedure.
 
 ## DNS records
 
+A copy-paste zone is in [`infra/dns/records.md`](../../infra/dns/records.md).
 Publish these records for the alias domain. Replace `example.com` with the
 domain, `mail.example.com` with the mail host, and `203.0.113.10` with the
 mail host's public address.

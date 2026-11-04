@@ -46,9 +46,18 @@ nix develop -c bash -c 'cd apps/server && cargo test'
 
 ## Recorded results
 
-The verification results for this revision are recorded in the pull request
-that closes issues #68-#73. The VM tests `mail-path`, `backup-restore`, and
-`abuse-controls` pass, `nix flake check` passes, and the Rust suite passes.
+Recorded for this revision:
+
+- `nix flake check`: passes (formatting, lint, Rust, web, Android, and the
+  three NixOS VM tests).
+- `backup-restore`: passes. The drill backs up, simulates loss, restores, and
+  verifies reconciliation repairs the mail store (`deleted=1`).
+- `abuse-controls`: passes. Unknown recipient `550`, relay attempt denied
+  (`454`), oversized message `552`, inbound per-sender limit holds the inbox at
+  two, outbound submission `450` after the limit, and a full disk records
+  `alert [disk_full]` with a `451` temporary failure.
+- Rust suite: all unit and integration tests pass.
+- DKIM: `cargo test dkim` verifies the signature is DMARC-aligned.
 
 ## Release notes: v0.1.0
 
