@@ -1,0 +1,11 @@
+{
+  "messageId": "018f9b60-0000-7000-8000-0000000000aa",
+  "aliasIds": [
+    "018f9b60-0000-7000-8000-000000000001"
+  ],
+  "primaryReceived": false,
+  "sender": "store@example.com",
+  "subject": "Your order",
+  "receivedAt": "2026-01-04T00:00:00Z",
+  "route": "inbox"
+}

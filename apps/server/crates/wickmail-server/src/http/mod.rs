@@ -494,6 +494,7 @@ pub fn router(state: AppState) -> Router {
             "/quarantine/{id}/delete",
             axum::routing::post(quarantine::delete),
         )
+        .route("/messages", axum::routing::get(messages::list))
         .route(
             "/messages/{id}/reply-context",
             axum::routing::get(messages::reply_context),

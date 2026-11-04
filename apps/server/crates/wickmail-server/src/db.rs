@@ -624,12 +624,7 @@ impl Store {
         let Some((id, sender, subject, received_at, route_text, primary_received)) = message else {
             return Ok(None);
         };
-        let mut statement = self.connection.prepare(
-            "SELECT alias_id FROM message_aliases WHERE message_id = ?1 ORDER BY alias_id",
-        )?;
-        let alias_ids = statement
-            .query_map(params![id], |row| row.get::<_, AliasId>("alias_id"))?
-            .collect::<Result<Vec<_>, _>>()?;
+        let alias_ids = self.message_alias_ids(id)?;
         Ok(Some(Message {
             id,
             alias_ids,
@@ -639,6 +634,53 @@ impl Store {
             received_at,
             route: route_from_str(&route_text)?,
         }))
+    }
+
+    /// Lists recent delivery metadata, newest first.
+    ///
+    /// The management API's messages view reads from here. Results are ordered
+    /// by `received_at` then message identity so pagination is deterministic.
+    pub fn list_messages(&self) -> Result<Vec<Message>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, sender, subject, received_at, route, primary_received
+             FROM messages ORDER BY received_at DESC, id DESC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let route_text: String = row.get("route")?;
+            Ok((
+                row.get::<_, MessageId>("id")?,
+                row.get::<_, String>("sender")?,
+                row.get::<_, String>("subject")?,
+                row.get::<_, crate::timestamp::Timestamp>("received_at")?,
+                route_text,
+                row.get::<_, bool>("primary_received")?,
+            ))
+        })?;
+        let mut messages = Vec::new();
+        for row in rows {
+            let (id, sender, subject, received_at, route_text, primary_received) = row?;
+            messages.push(Message {
+                id,
+                alias_ids: self.message_alias_ids(id)?,
+                primary_received,
+                sender,
+                subject,
+                received_at,
+                route: route_from_str(&route_text)?,
+            });
+        }
+        Ok(messages)
+    }
+
+    /// Loads the aliases linked to a message, in stable order.
+    fn message_alias_ids(&self, message_id: MessageId) -> Result<Vec<AliasId>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT alias_id FROM message_aliases WHERE message_id = ?1 ORDER BY alias_id",
+        )?;
+        let ids = statement
+            .query_map(params![message_id], |row| row.get::<_, AliasId>("alias_id"))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
     }
 
     /// Records delivery metadata without touching aliases.

@@ -68,6 +68,30 @@ export interface AliasListResponse {
   nextCursor: string | null;
 }
 
+/** Trusted route for an accepted message. */
+export type MessageRoute = "inbox" | "spam" | "quarantine";
+
+/**
+ * Delivery metadata for a recent message as returned by `GET /v1/messages`.
+ *
+ * This never includes a message body.
+ */
+export interface Message {
+  messageId: string;
+  aliasIds: string[];
+  primaryReceived: boolean;
+  sender: string;
+  subject: string;
+  receivedAt: string;
+  route: MessageRoute;
+}
+
+/** Response of `GET /v1/messages`. */
+export interface MessageListResponse {
+  items: Message[];
+  nextCursor: string | null;
+}
+
 /** Initial expiration setting for a new alias. */
 export type ExpiryRequest =
   | { mode: "lease"; seconds: number | null }

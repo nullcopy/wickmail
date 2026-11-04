@@ -23,6 +23,9 @@ import type {
   ExpiryRequest,
   IssuedTokenResponse,
   MailCredentialResponse,
+  Message,
+  MessageListResponse,
+  MessageRoute,
   PasskeyResponse,
   Provenance,
   QuarantineListResponse,
@@ -197,6 +200,23 @@ const enableRequest: Parser<EnableRequest> = object<EnableRequest>({
 
 const aliasListResponse: Parser<AliasListResponse> = object<AliasListResponse>({
   items: arrayOf(alias),
+  nextCursor: nullable(string),
+});
+
+const messageRoute: Parser<MessageRoute> = oneOf("inbox", "spam", "quarantine");
+
+const message: Parser<Message> = object<Message>({
+  messageId: string,
+  aliasIds: arrayOf(string),
+  primaryReceived: boolean,
+  sender: string,
+  subject: string,
+  receivedAt: string,
+  route: messageRoute,
+});
+
+const messageListResponse: Parser<MessageListResponse> = object<MessageListResponse>({
+  items: arrayOf(message),
   nextCursor: nullable(string),
 });
 
@@ -407,6 +427,16 @@ export function parseAlias(value: unknown, path = "$"): Alias {
 /** Validates an alias list payload. */
 export function parseAliasListResponse(value: unknown, path = "$"): AliasListResponse {
   return aliasListResponse(value, path);
+}
+
+/** Validates a message payload. */
+export function parseMessage(value: unknown, path = "$"): Message {
+  return message(value, path);
+}
+
+/** Validates a message list payload. */
+export function parseMessageListResponse(value: unknown, path = "$"): MessageListResponse {
+  return messageListResponse(value, path);
 }
 
 /** Validates a create-alias request payload. */
