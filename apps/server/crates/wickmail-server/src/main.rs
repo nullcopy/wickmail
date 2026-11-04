@@ -177,7 +177,10 @@ fn run_mail_store(args: &Args) -> Result<(), String> {
         .map(String::as_str)
         .ok_or_else(|| "usage: mail-store list|read --maildir <path>".to_string())?;
     let maildir = args.required("maildir")?;
-    let adapter = MailStoreAdapter::open(maildir);
+    let adapter = match args.get("quarantine-dir") {
+        Some(quarantine_dir) => MailStoreAdapter::with_quarantine(maildir, quarantine_dir),
+        None => MailStoreAdapter::open(maildir),
+    };
     match subcommand {
         "list" => {
             let mailbox = args.get("mailbox").unwrap_or_else(|| "Inbox".to_string());

@@ -218,7 +218,7 @@
                   nativeBuildInputs = [ pkgs.nixfmt ];
                 }
                 ''
-                  nixfmt --check ${./flake.nix} ${./nix/modules/default.nix}
+                  nixfmt --check ${./flake.nix} ${./nix/modules/default.nix} ${./nix/tests/mail-path.nix}
                   touch $out
                 '';
           };
@@ -287,12 +287,21 @@
     {
       packages = lib.mapAttrs (_: value: value.packages) all;
       devShells = lib.mapAttrs (_: value: { default = value.devShell; }) all;
-      checks = lib.mapAttrs (_: value: value.checks) all;
+      checks = lib.mapAttrs' (
+        system: value:
+        lib.nameValuePair system (
+          value.checks
+          // lib.optionalAttrs (system == "x86_64-linux") {
+            mail-path = import ./nix/tests/mail-path.nix {
+              pkgs = import nixpkgs { inherit system; };
+              wickmailModule = self.nixosModules.default;
+            };
+          }
+        )
+      ) all;
       apps = lib.mapAttrs (_: value: value.apps) all;
       formatter = lib.mapAttrs (_: value: value.formatter) all;
 
-      # The deployment module is filled in by M9. The output exists now so
-      # the flake shape is stable.
-      nixosModules.default = import ./nix/modules/default.nix;
+      nixosModules.default = import ./nix/modules/default.nix { inherit self; };
     };
 }

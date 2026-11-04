@@ -62,13 +62,34 @@ pub enum AdapterError {
 /// Reads Dovecot Maildirs for a single account.
 pub struct MailStoreAdapter {
     maildir: PathBuf,
+    quarantine_dir: PathBuf,
 }
 
 impl MailStoreAdapter {
     /// Creates an adapter over a user's Maildir root.
+    ///
+    /// The quarantine mailbox defaults to a Maildir++ folder under the same
+    /// root.
     pub fn open(maildir: impl Into<PathBuf>) -> Self {
+        let maildir = maildir.into();
+        let quarantine_dir = maildir.join(".Aliases.Expired");
+        Self {
+            maildir,
+            quarantine_dir,
+        }
+    }
+
+    /// Creates an adapter with the quarantine mailbox in a separate Maildir.
+    ///
+    /// This matches a Dovecot hidden namespace whose `mail_path` is outside the
+    /// user's IMAP namespace.
+    pub fn with_quarantine(
+        maildir: impl Into<PathBuf>,
+        quarantine_dir: impl Into<PathBuf>,
+    ) -> Self {
         Self {
             maildir: maildir.into(),
+            quarantine_dir: quarantine_dir.into(),
         }
     }
 
@@ -77,11 +98,20 @@ impl MailStoreAdapter {
         &self.maildir
     }
 
+    /// The quarantine mailbox's Maildir root.
+    pub fn quarantine_dir(&self) -> &Path {
+        &self.quarantine_dir
+    }
+
     /// The on-disk directory for a mailbox.
     ///
     /// Uses Maildir++ naming: subfolders live in a sibling directory prefixed
-    /// with `.`, with `/` in the mailbox name mapped to `.`.
+    /// with `.`, with `/` in the mailbox name mapped to `.`. The quarantine
+    /// mailbox maps to its configured directory.
     pub fn mailbox_dir(&self, mailbox: &str) -> PathBuf {
+        if mailbox.eq_ignore_ascii_case(QUARANTINE_MAILBOX) {
+            return self.quarantine_dir.clone();
+        }
         if mailbox.is_empty() || mailbox.eq_ignore_ascii_case("inbox") {
             return self.maildir.clone();
         }
