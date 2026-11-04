@@ -130,17 +130,17 @@ sequenceDiagram
 
 ### Failure mapping
 
-| Stage | Condition | Result |
-|---|---|---|
-| RCPT | Unknown recipient | `550` permanent failure |
-| RCPT | Disabled recipient | `550` permanent failure |
-| RCPT | Policy interface or database unavailable | `451` temporary failure |
-| RCPT | Expired recipient | Accepted; routed at delivery |
-| DATA | Malware detected | Rejected before final acceptance |
-| LMTP delivery | Policy interface or database unavailable | `451`; Postfix retries |
-| LMTP delivery | Spool unavailable or full | `451`; alert |
-| LMTP delivery | Dovecot unavailable | Message stays in spool and retries; no bounce |
-| After acceptance | Any alias state | Routed to inbox, quarantine, or spam; never permanently rejected |
+| Stage            | Condition                                | Result                                                           |
+| ---------------- | ---------------------------------------- | ---------------------------------------------------------------- |
+| RCPT             | Unknown recipient                        | `550` permanent failure                                          |
+| RCPT             | Disabled recipient                       | `550` permanent failure                                          |
+| RCPT             | Policy interface or database unavailable | `451` temporary failure                                          |
+| RCPT             | Expired recipient                        | Accepted; routed at delivery                                     |
+| DATA             | Malware detected                         | Rejected before final acceptance                                 |
+| LMTP delivery    | Policy interface or database unavailable | `451`; Postfix retries                                           |
+| LMTP delivery    | Spool unavailable or full                | `451`; alert                                                     |
+| LMTP delivery    | Dovecot unavailable                      | Message stays in spool and retries; no bounce                    |
+| After acceptance | Any alias state                          | Routed to inbox, quarantine, or spam; never permanently rejected |
 
 ## Address generation and canonicalization
 
@@ -154,20 +154,20 @@ Alias lookup is case-insensitive. The server canonicalizes the local part to low
 
 Each alias contains:
 
-| Field | Description |
-|---|---|
-| ID | Stable internal UUID |
-| Address | Canonical unique full email address with a readable random local part |
-| Label | User-facing name, such as "Example Store" |
-| Purpose | Optional order, merchant, or notes field |
-| Created at | Creation timestamp |
-| Expires at | Nullable; null means no expiry |
-| Disabled at | Nullable; disabled overrides lease state |
-| Lease duration | Renewal duration used when a renewal does not specify one |
-| Renew on outbound | Whether authenticated sending renews the lease |
-| Last inbound at | Most recent accepted inbound mail; informational only |
-| Last user activity at | Most recent user activity; see below |
-| Policy version | Optimistic concurrency control |
+| Field                 | Description                                                           |
+| --------------------- | --------------------------------------------------------------------- |
+| ID                    | Stable internal UUID                                                  |
+| Address               | Canonical unique full email address with a readable random local part |
+| Label                 | User-facing name, such as "Example Store"                             |
+| Purpose               | Optional order, merchant, or notes field                              |
+| Created at            | Creation timestamp                                                    |
+| Expires at            | Nullable; null means no expiry                                        |
+| Disabled at           | Nullable; disabled overrides lease state                              |
+| Lease duration        | Renewal duration used when a renewal does not specify one             |
+| Renew on outbound     | Whether authenticated sending renews the lease                        |
+| Last inbound at       | Most recent accepted inbound mail; informational only                 |
+| Last user activity at | Most recent user activity; see below                                  |
+| Policy version        | Optimistic concurrency control                                        |
 
 `last_user_activity_at` updates on authenticated outbound mail, manual renew, extend, set expiry, remove expiry, recover, and enable. It does not update on label, purpose, or policy edits, on disable, or on viewing and copying an alias.
 
@@ -194,27 +194,27 @@ A message accepted while an alias was active but delivered after expiry is quara
 
 ### Outbound submission truth table
 
-| Alias state | `renew_on_outbound` | Result |
-|---|---|---|
-| Active | true | Accept; set `expires_at = now + lease_duration` |
-| Active | false | Accept; leave `expires_at` unchanged |
-| Expired | true | Accept; set `expires_at = now + lease_duration` |
-| Expired | false | Reject submission; user must renew or enable the alias |
-| Disabled | either | Reject submission until explicitly enabled |
+| Alias state | `renew_on_outbound` | Result                                                 |
+| ----------- | ------------------- | ------------------------------------------------------ |
+| Active      | true                | Accept; set `expires_at = now + lease_duration`        |
+| Active      | false               | Accept; leave `expires_at` unchanged                   |
+| Expired     | true                | Accept; set `expires_at = now + lease_duration`        |
+| Expired     | false               | Reject submission; user must renew or enable the alias |
+| Disabled    | either              | Reject submission until explicitly enabled             |
 
 ### Manual action truth table
 
-| Action | Requirement | Effect |
-|---|---|---|
-| Renew | Enabled | `expires_at = now +` supplied duration, or `lease_duration` if omitted |
-| Extend | Enabled and non-null `expires_at` | `expires_at = max(now, expires_at) +` supplied duration, or `lease_duration` if omitted |
-| Set expiry | Enabled | Sets an absolute `expires_at`; `lease_duration` is unchanged |
-| Remove expiry | Enabled | Sets `expires_at = null`; `lease_duration` is unchanged |
-| Disable | Any state | Sets `disabled_at`; lease is unchanged |
-| Enable | Disabled | Clears `disabled_at` and sets `expires_at = now + lease_duration` unless an expiry is supplied |
-| Recover | Quarantined message | Moves the message to the inbox; lease is unchanged |
-| Recover and renew | Quarantined message and enabled alias | Recovers the message and applies Renew |
-| Recover and enable | Quarantined message and disabled alias | Requires explicit enable confirmation, then recovers and sets a new lease |
+| Action             | Requirement                            | Effect                                                                                         |
+| ------------------ | -------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Renew              | Enabled                                | `expires_at = now +` supplied duration, or `lease_duration` if omitted                         |
+| Extend             | Enabled and non-null `expires_at`      | `expires_at = max(now, expires_at) +` supplied duration, or `lease_duration` if omitted        |
+| Set expiry         | Enabled                                | Sets an absolute `expires_at`; `lease_duration` is unchanged                                   |
+| Remove expiry      | Enabled                                | Sets `expires_at = null`; `lease_duration` is unchanged                                        |
+| Disable            | Any state                              | Sets `disabled_at`; lease is unchanged                                                         |
+| Enable             | Disabled                               | Clears `disabled_at` and sets `expires_at = now + lease_duration` unless an expiry is supplied |
+| Recover            | Quarantined message                    | Moves the message to the inbox; lease is unchanged                                             |
+| Recover and renew  | Quarantined message and enabled alias  | Recovers the message and applies Renew                                                         |
+| Recover and enable | Quarantined message and disabled alias | Requires explicit enable confirmation, then recovers and sets a new lease                      |
 
 ### Creation
 
@@ -292,11 +292,11 @@ At inbound acceptance, the server records the set of envelope recipients, includ
 
 ### Reply identity selection
 
-| Provenance | Reply identity |
-|---|---|
-| Exactly one alias | That alias; the primary identity is offered as an alternative |
-| No alias (primary only) | The primary identity |
-| Multiple aliases | Prompt the user; never select silently |
+| Provenance              | Reply identity                                                |
+| ----------------------- | ------------------------------------------------------------- |
+| Exactly one alias       | That alias; the primary identity is offered as an alternative |
+| No alias (primary only) | The primary identity                                          |
+| Multiple aliases        | Prompt the user; never select silently                        |
 
 If the primary address and exactly one alias received the message, the alias is the default. If multiple aliases received it, the user must choose.
 

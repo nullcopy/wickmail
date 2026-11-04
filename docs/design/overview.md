@@ -29,13 +29,13 @@ The motivating scenario is an online purchase: the companion app generates a rea
 
 ## Naming
 
-| Item | Name |
-|---|---|
-| Product and repository | Wickmail |
-| Server and management API | `wickmail-server` |
-| Web management app | `wickmail-web` |
-| Android shell | `wickmail-android` |
-| Shared schemas and API client | `wickmail-core` |
+| Item                          | Name               |
+| ----------------------------- | ------------------ |
+| Product and repository        | Wickmail           |
+| Server and management API     | `wickmail-server`  |
+| Web management app            | `wickmail-web`     |
+| Android shell                 | `wickmail-android` |
+| Shared schemas and API client | `wickmail-core`    |
 
 ## Glossary
 

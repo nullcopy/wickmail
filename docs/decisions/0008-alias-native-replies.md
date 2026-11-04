@@ -16,11 +16,11 @@ The server records trusted provenance at inbound acceptance from the SMTP envelo
 
 Reply identity selection follows these rules:
 
-| Provenance | Reply identity |
-|---|---|
-| Exactly one alias | That alias, with the primary identity offered as an alternative |
-| No alias (primary only) | The primary identity |
-| Multiple aliases | Prompt the user; never select silently |
+| Provenance              | Reply identity                                                  |
+| ----------------------- | --------------------------------------------------------------- |
+| Exactly one alias       | That alias, with the primary identity offered as an alternative |
+| No alias (primary only) | The primary identity                                            |
+| Multiple aliases        | Prompt the user; never select silently                          |
 
 If both the primary address and exactly one alias received the message, the alias is the default and the primary is offered. If multiple aliases received it, the user must choose even if the primary also received it.
 
