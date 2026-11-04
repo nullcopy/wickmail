@@ -45,6 +45,36 @@ export class FakeMailStore implements MailStoreAdapter {
     return entry === undefined ? undefined : this.toStored(entry);
   }
 
+  async getMessageIn(mailbox: string, messageId: string): Promise<StoredMessage | undefined> {
+    const entry = this.entries.find(
+      (candidate) => candidate.mailbox === mailbox && candidate.messageId === messageId,
+    );
+    return entry === undefined ? undefined : this.toStored(entry);
+  }
+
+  async copyMessage(messageId: string, toMailbox: string): Promise<MessageLocator | undefined> {
+    const existing = this.entries.find(
+      (candidate) => candidate.mailbox === toMailbox && candidate.messageId === messageId,
+    );
+    if (existing !== undefined) {
+      return this.toStored(existing).locator;
+    }
+    const source = this.entries.find((candidate) => candidate.messageId === messageId);
+    if (source === undefined) {
+      return undefined;
+    }
+    return this.put(toMailbox, messageId, source.raw, source.receivedAt);
+  }
+
+  async deleteMessage(mailbox: string, messageId: string): Promise<void> {
+    const index = this.entries.findIndex(
+      (candidate) => candidate.mailbox === mailbox && candidate.messageId === messageId,
+    );
+    if (index !== -1) {
+      this.entries.splice(index, 1);
+    }
+  }
+
   private toStored(entry: FakeEntry): StoredMessage {
     return {
       messageId: entry.messageId,

@@ -53,6 +53,23 @@ export interface MailStoreAdapter {
 }
 
 /**
+ * The mail-store write path recovery and retention need.
+ *
+ * Copying preserves the stable message ID, so a message exists in at most one
+ * mailbox at a time except during recovery, when the copy is made before the
+ * quarantine copy is removed. Every operation is idempotent, so a retry after
+ * a crash is safe.
+ */
+export interface MutableMailStore extends MailStoreAdapter {
+  /** Read a message scoped to one mailbox, where the identity is unique. */
+  getMessageIn(mailbox: string, messageId: string): Promise<StoredMessage | undefined>;
+  /** Copy a message into a mailbox, preserving its identity. Idempotent. */
+  copyMessage(messageId: string, toMailbox: string): Promise<MessageLocator | undefined>;
+  /** Remove a message from one mailbox. Idempotent. */
+  deleteMessage(mailbox: string, messageId: string): Promise<void>;
+}
+
+/**
  * Read a message by identity, using a cached locator for speed when present.
  *
  * The locator is only a shortcut: if it points at a different message, the
