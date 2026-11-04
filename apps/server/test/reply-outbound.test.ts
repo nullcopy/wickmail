@@ -108,6 +108,21 @@ describe("enforceOutboundIdentity", () => {
     expect(result.accepted).toBe(false);
   });
 
+  it("rejects multiple From header fields", () => {
+    const raw = [
+      `From: ${ALIAS}`,
+      "From: other@example.net",
+      "To: sender@example.net",
+      "",
+      "body",
+    ].join("\r\n");
+    const result = enforceOutboundIdentity(raw, { senderAddress: ALIAS });
+    expect(result).toEqual({
+      accepted: false,
+      reason: "From must contain exactly one mailbox",
+    });
+  });
+
   it("rejects a From that is not the selected alias", () => {
     const raw = ["From: other@example.net", "To: sender@example.net", "", "body"].join("\r\n");
     const result = enforceOutboundIdentity(raw, { senderAddress: ALIAS });
