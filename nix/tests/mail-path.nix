@@ -219,6 +219,34 @@ let
     else:
         raise AssertionError("wickmail.service did not restart")
 
+    step("a quarantined message is recovered into the Inbox")
+    run(
+        "wickmail-server", "quarantine", "recover",
+        "--db", DB, "--maildir", MAILDIR, "--quarantine-dir", QUARANTINE,
+        "--message-id", quarantined,
+    )
+    wait_for_inbox(3)
+    client = imap()
+    try:
+        recovered = False
+        for message in inbox_ids(client):
+            if "X-Wickmail-Route: Quarantine" in message_headers(message):
+                recovered = True
+        assert recovered, "recovered message was not found in the Inbox"
+    finally:
+        client.logout()
+    assert quarantined not in quarantine_list(), "quarantine copy survived recovery"
+
+    step("reconciliation and retention run cleanly")
+    run(
+        "wickmail-server", "quarantine", "reconcile",
+        "--db", DB, "--maildir", MAILDIR, "--quarantine-dir", QUARANTINE,
+    )
+    run(
+        "wickmail-server", "quarantine", "sweep",
+        "--db", DB, "--maildir", MAILDIR, "--quarantine-dir", QUARANTINE,
+    )
+
     step("all checks passed")
   '';
 in

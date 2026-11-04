@@ -8,11 +8,13 @@ use std::collections::HashMap;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use time::Duration;
 use wickmail_server::address::{CanonicalAddress, Domain};
 use wickmail_server::clock::SystemClock;
 use wickmail_server::generator::AliasGenerator;
 use wickmail_server::mail::{MailStoreAdapter, ServerConfig, Spool, serve};
 use wickmail_server::message::MessageId;
+use wickmail_server::quarantine::{DeleteReason, QuarantineManager, RetentionPolicy};
 use wickmail_server::service::{AliasService, CreateAlias, ExpiryChoice};
 use wickmail_server::timestamp::Timestamp;
 use wickmail_server::{PRODUCT_NAME, Store, StoreError, version};
@@ -31,6 +33,7 @@ fn main() -> ExitCode {
         "create-alias" => run_create_alias(&parsed),
         "spool-stats" => run_spool_stats(&parsed),
         "mail-store" => run_mail_store(&parsed),
+        "quarantine" => run_quarantine(&parsed),
         other => Err(format!("unknown command: {other}")),
     };
     match result {
@@ -89,7 +92,128 @@ fn run_serve(args: &Args) -> Result<(), String> {
     if let Some(hostname) = args.get("hostname") {
         config.hostname = hostname;
     }
+    if let Some(maildir) = args.get("maildir") {
+        config.maildir = Some(maildir.into());
+        config.quarantine_dir = args.get("quarantine-dir").map(Into::into);
+    }
+    config.retention = retention_from_args(args)?;
+    if let Some(seconds) = args.get("maintenance-interval") {
+        config.maintenance_interval = std::time::Duration::from_secs(
+            seconds
+                .parse()
+                .map_err(|_| "--maintenance-interval must be an integer".to_string())?,
+        );
+    }
     serve(config).map_err(|error| error.to_string())
+}
+
+/// Builds a retention policy from `--lease-retention-days` style options.
+fn retention_from_args(args: &Args) -> Result<RetentionPolicy, String> {
+    let mut policy = RetentionPolicy::default();
+    if let Some(days) = args.get("lease-retention-days") {
+        policy.lease.retention = Duration::days(parse_i64(&days, "lease-retention-days")?);
+    }
+    if let Some(days) = args.get("spam-retention-days") {
+        policy.spam.retention = Duration::days(parse_i64(&days, "spam-retention-days")?);
+    }
+    if let Some(count) = args.get("lease-count-quota") {
+        policy.lease.count_quota = Some(
+            count
+                .parse()
+                .map_err(|_| "--lease-count-quota must be an integer".to_string())?,
+        );
+    }
+    if let Some(count) = args.get("spam-count-quota") {
+        policy.spam.count_quota = Some(
+            count
+                .parse()
+                .map_err(|_| "--spam-count-quota must be an integer".to_string())?,
+        );
+    }
+    Ok(policy)
+}
+
+fn parse_i64(value: &str, name: &str) -> Result<i64, String> {
+    value
+        .parse()
+        .map_err(|_| format!("--{name} must be an integer"))
+}
+
+fn run_quarantine(args: &Args) -> Result<(), String> {
+    let subcommand = args
+        .positional
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| "usage: quarantine list|reconcile|sweep|recover|delete".to_string())?;
+    let db_path = args.required("db")?;
+    let maildir = args.required("maildir")?;
+    let mut store = Store::open(&db_path).map_err(store_error)?;
+    store.migrate().map_err(store_error)?;
+    let adapter = match args.get("quarantine-dir") {
+        Some(quarantine_dir) => MailStoreAdapter::with_quarantine(maildir, quarantine_dir),
+        None => MailStoreAdapter::open(maildir),
+    };
+    let policy = retention_from_args(args)?;
+    let manager = QuarantineManager::new(&store, &adapter, policy, Arc::new(SystemClock));
+
+    match subcommand {
+        "list" => {
+            for entry in manager.list().map_err(|error| error.to_string())? {
+                println!(
+                    "{} {:?} {:?} {} {}",
+                    entry.message_id,
+                    entry.kind,
+                    entry.status,
+                    entry.quarantine_expires_at,
+                    entry.subject
+                );
+            }
+            Ok(())
+        }
+        "reconcile" => {
+            let report = manager.reconcile().map_err(|error| error.to_string())?;
+            println!(
+                "scanned={} rebuilt={} recovered={} deletions={} requeued={} duplicates={} deleted={} locators={}",
+                report.scanned,
+                report.metadata_rebuilt,
+                report.completed_recoveries,
+                report.completed_deletions,
+                report.restored_to_quarantine,
+                report.removed_duplicate_copies,
+                report.marked_deleted,
+                report.locators_refreshed,
+            );
+            Ok(())
+        }
+        "sweep" => {
+            let report = manager
+                .retention_sweep()
+                .map_err(|error| error.to_string())?;
+            println!("deleted={} purged={}", report.deleted, report.purged);
+            Ok(())
+        }
+        "recover" => {
+            let id = message_id_arg(args)?;
+            let metadata = manager.recover(id).map_err(|error| error.to_string())?;
+            println!("{} {:?}", metadata.message_id, metadata.status);
+            Ok(())
+        }
+        "delete" => {
+            let id = message_id_arg(args)?;
+            let metadata = manager
+                .delete(id, DeleteReason::UserRequest)
+                .map_err(|error| error.to_string())?;
+            println!("{} {:?}", metadata.message_id, metadata.status);
+            Ok(())
+        }
+        other => Err(format!("unknown quarantine subcommand: {other}")),
+    }
+}
+
+fn message_id_arg(args: &Args) -> Result<MessageId, String> {
+    args.required("message-id")?
+        .parse()
+        .map_err(|error| format!("invalid --message-id: {error}"))
 }
 
 fn run_create_alias(args: &Args) -> Result<(), String> {
