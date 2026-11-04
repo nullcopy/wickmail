@@ -28,6 +28,65 @@ let
   runDir = "/run/wickmail";
   doveconf = config.services.dovecot2.package;
 
+  # Wraps an operational shell script from `infra/` so the systemd units and
+  # `environment.systemPackages` can run it with its tools on `PATH`.
+  mkOperationalScript =
+    name: src: runtimeInputs:
+    pkgs.stdenvNoCC.mkDerivation {
+      pname = name;
+      version = "0.0.0";
+      inherit src;
+      dontUnpack = true;
+      nativeBuildInputs = [ pkgs.makeWrapper ];
+      installPhase = ''
+        runHook preInstall
+        install -Dm0755 "$src" "$out/bin/${name}"
+        patchShebangs "$out/bin/${name}"
+        wrapProgram "$out/bin/${name}" --prefix PATH : ${lib.makeBinPath runtimeInputs}
+        runHook postInstall
+      '';
+    };
+
+  backupScript = mkOperationalScript "wickmail-backup" ../../infra/backup/wickmail-backup.sh [
+    cfg.package
+    pkgs.sqlite
+    pkgs.coreutils
+    pkgs.gnutar
+    pkgs.gzip
+    pkgs.gnused
+    pkgs.gnugrep
+    pkgs.gawk
+    pkgs.findutils
+  ];
+
+  restoreScript = mkOperationalScript "wickmail-restore" ../../infra/backup/wickmail-restore.sh [
+    cfg.package
+    pkgs.sqlite
+    pkgs.coreutils
+    pkgs.gnutar
+    pkgs.gzip
+    pkgs.gnused
+    pkgs.gnugrep
+    pkgs.gawk
+    pkgs.findutils
+  ];
+
+  monitorScript = mkOperationalScript "wickmail-monitor" ../../infra/monitoring/wickmail-monitor.sh [
+    cfg.package
+    pkgs.coreutils
+    pkgs.gnugrep
+    pkgs.gnused
+    pkgs.gawk
+    pkgs.curl
+    pkgs.openssl
+    pkgs.postfix
+    pkgs.systemd
+    pkgs.util-linux
+    pkgs.sqlite
+  ];
+
+  tlsEnabled = cfg.tls.certificateFile != null;
+
   globalSieve = pkgs.writeTextFile {
     name = "wickmail-global.sieve";
     text = ''
@@ -84,10 +143,10 @@ in
 
     mailPassword = mkOption {
       type = types.str;
-      default = "wickmail";
       description = ''
-        Password for the single Dovecot mail account. Management
-        authentication is separate and is not configured by this module.
+        Password for the single Dovecot mail account. There is no default;
+        supplying a credential is mandatory. Management authentication is
+        separate and is not configured by this module.
       '';
     };
 
@@ -207,6 +266,214 @@ in
       default = { };
       description = "Extra Postfix main.cf settings.";
     };
+
+    dkimKeyFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = "/run/secrets/wickmail-dkim.pem";
+      description = ''
+        PEM-encoded RSA private key used to DKIM-sign outbound replies. When
+        set, replies are signed for `domain` with `dkimSelector`, so the
+        signature is DMARC-aligned with the `From` domain. Publish the matching
+        public key as a TXT record at
+        `dkimSelector._domainkey.<domain>`.
+      '';
+    };
+
+    dkimSelector = mkOption {
+      type = types.str;
+      default = "wickmail";
+      description = "DKIM selector for outbound replies.";
+    };
+
+    tls = {
+      certificateFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        example = "/var/lib/acme/mail.example.com/fullchain.pem";
+        description = ''
+          PEM-encoded TLS certificate chain. When set, Postfix and Dovecot use
+          it for STARTTLS and implicit TLS. Must be set together with
+          `tls.keyFile`.
+        '';
+      };
+
+      keyFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        example = "/var/lib/acme/mail.example.com/key.pem";
+        description = "PEM-encoded TLS private key matching `tls.certificateFile`.";
+      };
+    };
+
+    maxMessageBytes = mkOption {
+      type = types.nullOr types.int;
+      default = null;
+      example = 26214400;
+      description = ''
+        Maximum accepted message size in bytes. `null` uses the server default
+        (10 MiB). Oversized messages are rejected with a temporary failure.
+      '';
+    };
+
+    perSenderRate = mkOption {
+      type = types.nullOr types.int;
+      default = null;
+      example = 100;
+      description = ''
+        Inbound messages accepted per sender per hour. `null` uses the server
+        default (100).
+      '';
+    };
+
+    globalRate = mkOption {
+      type = types.nullOr types.int;
+      default = null;
+      example = 1000;
+      description = ''
+        Inbound messages accepted per hour across all senders. `null` uses the
+        server default (1000).
+      '';
+    };
+
+    perAliasQuarantineCount = mkOption {
+      type = types.nullOr types.int;
+      default = null;
+      example = 100;
+      description = ''
+        Maximum quarantined messages retained per alias. `null` uses the
+        server default (100). Oldest eligible messages are deleted first.
+      '';
+    };
+
+    perAliasQuarantineBytes = mkOption {
+      type = types.nullOr types.int;
+      default = null;
+      example = 104857600;
+      description = ''
+        Maximum quarantined bytes retained per alias. `null` uses the server
+        default (100 MiB).
+      '';
+    };
+
+    outboundRateLimit = mkOption {
+      type = types.nullOr types.int;
+      default = null;
+      example = 200;
+      description = ''
+        Authenticated submission messages per client per hour, enforced by
+        Postfix `smtpd_client_message_rate_limit`. `null` leaves the Postfix
+        default in place.
+      '';
+    };
+
+    backup = {
+      enable = mkEnableOption "scheduled Wickmail backups";
+
+      outputDirectory = mkOption {
+        type = types.path;
+        default = "/var/backup/wickmail";
+        description = "Directory that receives backup archives.";
+      };
+
+      schedule = mkOption {
+        type = types.str;
+        default = "daily";
+        example = "*-*-* 03:30:00";
+        description = "systemd `OnCalendar` expression for the backup timer.";
+      };
+
+      retention = mkOption {
+        type = types.int;
+        default = 14;
+        description = "Number of archives to keep; older archives are pruned.";
+      };
+
+      configDirectory = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        example = "/etc/wickmail";
+        description = ''
+          Additional configuration directory to include in the archive, such as
+          DKIM keys or TLS material. The NixOS configuration itself is
+          version-controlled separately and is not captured here.
+        '';
+      };
+
+      metadataOnly = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Skip the mail store and back up only the database and spool.";
+      };
+    };
+
+    monitoring = {
+      enable = mkEnableOption "periodic Wickmail mail-path monitoring";
+
+      interval = mkOption {
+        type = types.str;
+        default = "5min";
+        example = "1min";
+        description = "systemd time span between monitoring runs.";
+      };
+
+      webhookUrl = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "https://alerts.example.com/hooks/wickmail";
+        description = ''
+          When set, alerts are POSTed as JSON to this URL in addition to
+          journald.
+        '';
+      };
+
+      certificateFile = mkOption {
+        type = types.nullOr types.path;
+        default = cfg.tls.certificateFile;
+        defaultText = lib.literalExpression "config.services.wickmail.tls.certificateFile";
+        description = "TLS certificate whose expiry is checked.";
+      };
+
+      maxSpoolDepth = mkOption {
+        type = types.int;
+        default = 1000;
+        description = "Alert when the durable spool holds more than this many messages.";
+      };
+
+      maxSpoolAgeSeconds = mkOption {
+        type = types.int;
+        default = 3600;
+        description = "Alert when the oldest spooled message is older than this.";
+      };
+
+      maxDiskPercent = mkOption {
+        type = types.int;
+        default = 90;
+        description = "Alert when the state or mail tree is more than this full.";
+      };
+
+      minCertificateDays = mkOption {
+        type = types.int;
+        default = 14;
+        description = "Alert when the TLS certificate expires within this many days.";
+      };
+
+      maxAuthFailures = mkOption {
+        type = types.int;
+        default = 20;
+        description = "Alert when authentication failures exceed this in the lookback window.";
+      };
+
+      textfile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        example = "/var/lib/node-exporter/textfile/wickmail.prom";
+        description = ''
+          When set, Prometheus textfile-collector metrics are written here on
+          each run.
+        '';
+      };
+    };
   };
 
   config = mkIf cfg.enable {
@@ -214,6 +481,18 @@ in
       {
         assertion = config.services.dovecot2.enable;
         message = "services.wickmail requires services.dovecot2.enable = true.";
+      }
+      {
+        assertion = tlsEnabled -> cfg.tls.keyFile != null;
+        message = "services.wickmail.tls.keyFile must be set with tls.certificateFile.";
+      }
+      {
+        assertion = cfg.tls.keyFile == null -> !tlsEnabled;
+        message = "services.wickmail.tls.certificateFile must be set with tls.keyFile.";
+      }
+      {
+        assertion = !cfg.backup.enable || cfg.backup.outputDirectory != cfg.stateDir;
+        message = "services.wickmail.backup.outputDirectory must differ from stateDir.";
       }
     ];
 
@@ -240,6 +519,9 @@ in
     environment.systemPackages = [
       doveconf.passthru.dovecot_pigeonhole
       cfg.package
+      backupScript
+      restoreScript
+      monitorScript
     ];
 
     services.dovecot2.settings = {
@@ -305,6 +587,12 @@ in
           };
         }
       ];
+    }
+    // lib.optionalAttrs tlsEnabled {
+      # `ssl = yes` is required globally before Dovecot listens on TLS ports.
+      ssl = true;
+      ssl_server_cert_file = cfg.tls.certificateFile;
+      ssl_server_key_file = cfg.tls.keyFile;
     };
 
     services.rspamd = mkIf cfg.enableRspamd {
@@ -344,25 +632,38 @@ in
         smtpd_restriction_classes = "wickmail_sender";
         wickmail_sender = "check_sender_access socketmap:unix:${runDir}/submission.sock:wickmail-submission";
       }
+      // lib.optionalAttrs tlsEnabled {
+        # Postfix 3.9 uses a certificate chain file list: certificate first,
+        # then private key.
+        smtpd_tls_chain_files = [
+          cfg.tls.certificateFile
+          cfg.tls.keyFile
+        ];
+      }
       // cfg.extraPostfixSettings;
     };
 
     services.postfix.enableSubmission = cfg.enableSubmission;
-    services.postfix.submissionOptions = lib.mkIf cfg.enableSubmission {
-      smtpd_tls_security_level = "encrypt";
-      smtpd_sasl_auth_enable = "yes";
-      smtpd_sasl_type = "dovecot";
-      smtpd_sasl_path = cfg.submissionSaslPath;
-      # Require authentication at the recipient stage so the earlier sender
-      # ownership check always runs; `permit` in the client stage would accept
-      # the request before the sender is checked.
-      smtpd_recipient_restrictions = "permit_sasl_authenticated,reject";
-      # The envelope sender must be an owned identity whose lease permits
-      # outbound mail; the server's socketmap makes the decision.
-      smtpd_sender_restrictions = "wickmail_sender";
-      access_map_reject_code = "550";
-      milter_macro_daemon_name = "ORIGINATING";
-    };
+    services.postfix.submissionOptions =
+      lib.mkIf cfg.enableSubmission {
+        smtpd_tls_security_level = "encrypt";
+        smtpd_sasl_auth_enable = "yes";
+        smtpd_sasl_type = "dovecot";
+        smtpd_sasl_path = cfg.submissionSaslPath;
+        # Require authentication at the recipient stage so the earlier sender
+        # ownership check always runs; `permit` in the client stage would accept
+        # the request before the sender is checked.
+        smtpd_recipient_restrictions = "permit_sasl_authenticated,reject";
+        # The envelope sender must be an owned identity whose lease permits
+        # outbound mail; the server's socketmap makes the decision.
+        smtpd_sender_restrictions = "wickmail_sender";
+        access_map_reject_code = "550";
+        milter_macro_daemon_name = "ORIGINATING";
+      }
+      // lib.optionalAttrs (cfg.outboundRateLimit != null) {
+        # Per-client submission throttle, enforced by Postfix anvil.
+        smtpd_client_message_rate_limit = toString cfg.outboundRateLimit;
+      };
 
     systemd.services.wickmail = {
       description = "Wickmail inbound mail path";
@@ -396,6 +697,25 @@ in
             "--web-root ${cfg.webPackage}/share/wickmail-web"
             "--outbound-dir ${cfg.stateDir}/outbound"
           ]
+          ++ lib.optionals (cfg.dkimKeyFile != null) [
+            "--dkim-key ${cfg.dkimKeyFile}"
+            "--dkim-selector ${cfg.dkimSelector}"
+          ]
+          ++ lib.optionals (cfg.maxMessageBytes != null) [
+            "--max-message-bytes ${toString cfg.maxMessageBytes}"
+          ]
+          ++ lib.optionals (cfg.perSenderRate != null) [
+            "--per-sender-rate ${toString cfg.perSenderRate}"
+          ]
+          ++ lib.optionals (cfg.globalRate != null) [
+            "--global-rate ${toString cfg.globalRate}"
+          ]
+          ++ lib.optionals (cfg.perAliasQuarantineCount != null) [
+            "--per-alias-count ${toString cfg.perAliasQuarantineCount}"
+          ]
+          ++ lib.optionals (cfg.perAliasQuarantineBytes != null) [
+            "--per-alias-bytes ${toString cfg.perAliasQuarantineBytes}"
+          ]
           ++ lib.optional (!cfg.cookieSecure) "--cookie-insecure"
         );
         # The proxy needs access to the mail store and the Dovecot LMTP socket;
@@ -409,6 +729,78 @@ in
       preStart = ''
         ${cfg.package}/bin/wickmail-server migrate ${cfg.stateDir}/wickmail.sqlite
       '';
+    };
+
+    # Scheduled backups. The service runs as root because the mail store is
+    # owned by the mail user and the state tree by the server user.
+    systemd.services.wickmail-backup = mkIf cfg.backup.enable {
+      description = "Wickmail backup";
+      after = [ "wickmail.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        User = "root";
+        Group = "root";
+        ExecStart = lib.concatStringsSep " " (
+          [
+            "${backupScript}/bin/wickmail-backup"
+            "--state-dir ${cfg.stateDir}"
+            "--mail-root ${cfg.mailRoot}"
+            "--output ${cfg.backup.outputDirectory}"
+            "--retention ${toString cfg.backup.retention}"
+          ]
+          ++ lib.optional (cfg.backup.configDirectory != null) "--config-dir ${cfg.backup.configDirectory}"
+          ++ lib.optional cfg.backup.metadataOnly "--metadata-only"
+        );
+      };
+    };
+
+    systemd.timers.wickmail-backup = mkIf cfg.backup.enable {
+      description = "Wickmail backup timer";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = cfg.backup.schedule;
+        Persistent = true;
+      };
+    };
+
+    # Periodic mail-path health checks with alerts to journald and an
+    # optional webhook. A run with alerts exits non-zero so it is visible in
+    # `systemctl --failed`.
+    systemd.services.wickmail-monitor = mkIf cfg.monitoring.enable {
+      description = "Wickmail mail-path monitoring";
+      after = [ "wickmail.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        User = "root";
+        Group = "root";
+        ExecStart = lib.concatStringsSep " " (
+          [
+            "${monitorScript}/bin/wickmail-monitor"
+            "--unit wickmail.service"
+            "--state-dir ${cfg.stateDir}"
+            "--mail-root ${cfg.mailRoot}"
+            "--max-spool-depth ${toString cfg.monitoring.maxSpoolDepth}"
+            "--max-spool-age ${toString cfg.monitoring.maxSpoolAgeSeconds}"
+            "--max-disk-percent ${toString cfg.monitoring.maxDiskPercent}"
+            "--min-cert-days ${toString cfg.monitoring.minCertificateDays}"
+            "--max-auth-failures ${toString cfg.monitoring.maxAuthFailures}"
+          ]
+          ++ lib.optional (cfg.monitoring.webhookUrl != null) "--webhook ${cfg.monitoring.webhookUrl}"
+          ++ lib.optional (
+            cfg.monitoring.certificateFile != null
+          ) "--certificate ${cfg.monitoring.certificateFile}"
+          ++ lib.optional (cfg.monitoring.textfile != null) "--textfile ${cfg.monitoring.textfile}"
+        );
+      };
+    };
+
+    systemd.timers.wickmail-monitor = mkIf cfg.monitoring.enable {
+      description = "Wickmail mail-path monitoring timer";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "2min";
+        OnUnitActiveSec = cfg.monitoring.interval;
+      };
     };
   };
 }
