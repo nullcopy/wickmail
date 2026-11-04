@@ -225,16 +225,10 @@ let
         "--db", DB, "--maildir", MAILDIR, "--quarantine-dir", QUARANTINE,
         "--message-id", quarantined,
     )
-    wait_for_inbox(3)
-    client = imap()
-    try:
-        recovered = False
-        for message in inbox_ids(client):
-            if "X-Wickmail-Route: Quarantine" in message_headers(message):
-                recovered = True
-        assert recovered, "recovered message was not found in the Inbox"
-    finally:
-        client.logout()
+    inbox = run("wickmail-server", "mail-store", "list", "--maildir", MAILDIR)
+    recovered_inbox = [line.split()[0] for line in inbox.splitlines() if line.strip()]
+    assert quarantined in recovered_inbox, f"recovered message missing from Inbox: {inbox}"
+    assert recovered_inbox.count(quarantined) == 1, "recovered message was duplicated"
     assert quarantined not in quarantine_list(), "quarantine copy survived recovery"
 
     step("reconciliation and retention run cleanly")
