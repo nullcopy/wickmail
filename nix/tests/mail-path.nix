@@ -305,6 +305,7 @@ let
     wait_for_inbox(4)
     client = imap()
     try:
+        client.select("Inbox")
         status, data = client.search(None, "FROM", "MAILER-DAEMON")
         assert status == "OK"
         assert data[0].split() == [], "a bounce was delivered for a held message"
