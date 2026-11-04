@@ -63,6 +63,7 @@
                 workspaceDirs = [
                   "apps/web"
                   "packages/core"
+                  "apps/server/crates/wickmail-server/fixtures"
                 ];
               in
               if path == ./. then
@@ -146,13 +147,18 @@
             rustfmt
           ];
 
+          # Rust checks reuse the vendored Cargo dependencies so they build
+          # offline. buildRustPackage installs the vendored sources and a
+          # `.cargo/config.toml`; the check script replaces the build phase.
           mkRustCheck =
             name: script:
-            pkgs.stdenv.mkDerivation {
-              name = "wickmail-server-${name}";
+            pkgs.rustPlatform.buildRustPackage {
+              pname = "wickmail-server-${name}";
+              version = "0.0.0";
               src = serverSrc;
+              cargoLock.lockFile = ./apps/server/Cargo.lock;
               nativeBuildInputs = rustToolchain;
-              dontConfigure = true;
+              doCheck = false;
               buildPhase = ''
                 runHook preBuild
                 export CARGO_HOME="$TMPDIR/cargo-home"
@@ -200,6 +206,7 @@
             rust-test = mkRustCheck "test" "cargo test --all-targets --all-features --locked --offline";
 
             web-svelte-check = mkNpmCheck "svelte-check" "npm run check --workspace=@wickmail/web";
+            web-core-check = mkNpmCheck "core-check" "npm run check --workspace=@wickmail/core";
             web-prettier = mkNpmCheck "prettier" "npm run format:check";
             web-eslint = mkNpmCheck "eslint" "npm run lint";
             web-test = mkNpmCheck "test" "npm run test --workspace=@wickmail/core";

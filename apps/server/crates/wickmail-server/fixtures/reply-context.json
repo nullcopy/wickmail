@@ -1,0 +1,15 @@
+{
+  "messageId": "018f9b60-0000-7000-8000-0000000000aa",
+  "from": "store@example.com",
+  "subject": "Your order",
+  "text": "Your order shipped.",
+  "provenance": {
+    "aliasIds": [
+      "018f9b60-0000-7000-8000-000000000001"
+    ],
+    "primaryReceived": true,
+    "replyIdentity": {
+      "alias": "018f9b60-0000-7000-8000-000000000001"
+    }
+  }
+}

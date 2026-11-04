@@ -3,6 +3,9 @@ flake.nix
 flake.lock
 nix/
 
+# Rust-generated contract fixtures are pinned byte-for-byte by a Rust test.
+apps/server/crates/wickmail-server/fixtures/
+
 # Prose, metadata, and repository documentation.
 LICENSE
 README.md
@@ -10,6 +13,10 @@ docs/
 *.md
 .gitignore
 .github/
+
+# The Rust server and its contract fixtures are formatted by rustfmt and
+# serde, not Prettier.
+apps/server/
 
 # Build output.
 node_modules/

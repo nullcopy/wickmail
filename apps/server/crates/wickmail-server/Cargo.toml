@@ -11,3 +11,14 @@ description = "Policy lookup, LMTP proxy, lease engine, and management API for W
 workspace = true
 
 [dependencies]
+getrandom = "0.4.3"
+idna = "1.1.0"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+time = { version = "0.3.45", features = ["serde", "serde-well-known", "formatting", "parsing", "macros"] }
+uuid = { version = "1.26.1", features = ["v4", "v7", "serde"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

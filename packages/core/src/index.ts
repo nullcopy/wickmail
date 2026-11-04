@@ -1,32 +1,35 @@
 /**
- * Version of the management API contract this client mirrors.
+ * `wickmail-core` mirrors the server's management API contract.
  *
- * The Rust server is the source of truth for the contract; this value changes
- * when the client is updated to match a new server contract version.
+ * The Rust server in `apps/server` owns the contract. This package provides the
+ * client-facing request and response schemas (`contract.ts`) and runtime
+ * validation for API payloads (`validate.ts`). It contains no lease
+ * evaluation, expiry derivation, or routing logic: the server computes `state`
+ * and `lastUsedAt`, and clients only read them.
+ *
+ * Drift is guarded by the fixtures in
+ * `apps/server/crates/wickmail-server/fixtures`, which the Rust crate generates
+ * from its own types and `validate.test.ts` validates here.
  */
-export const API_CONTRACT_VERSION = "0.0.0";
 
-/** Lifecycle state of an alias, computed by the server. */
-export type AliasState = "active" | "expired" | "disabled";
+export * from "./contract.ts";
+export * from "./validate.ts";
+
+import type { Alias } from "./contract.ts";
 
 /**
- * An alias as returned by the management API.
+ * Returns true when the server-computed state is active.
  *
- * Clients consume the server-computed {@link Alias.state} and raw timestamps;
- * they never derive lease state themselves.
+ * This reads the server's decision; it does not derive expiry.
  */
-export interface Alias {
-  /** Opaque, server-assigned identifier. */
-  id: string;
-  /** Full address, for example `green.farm@example.com`. */
-  address: string;
-  /** Server-computed lifecycle state. */
-  state: AliasState;
-  /** Lease expiry as an RFC 3339 timestamp in UTC. */
-  expiresAt: string;
-}
-
-/** Returns true when the alias currently delivers mail to the inbox. */
 export function isActive(alias: Alias): boolean {
   return alias.state === "active";
 }
+
+/**
+ * Version of the management API contract this client mirrors.
+ *
+ * This must equal the server's `API_CONTRACT_VERSION`; the contract fixture
+ * test enforces it.
+ */
+export const API_CONTRACT_VERSION = "1.0.0";
