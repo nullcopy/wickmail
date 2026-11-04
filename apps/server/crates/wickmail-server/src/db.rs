@@ -14,7 +14,9 @@ use thiserror::Error;
 use crate::address::CanonicalAddress;
 use crate::alias::{Alias, AliasId};
 use crate::audit::{AuditEvent, AuditEventId, AuditEventKind};
+use crate::mail::store::MailboxLocator;
 use crate::message::{Message, MessageId, Route};
+use crate::quarantine::{QuarantineKind, QuarantineMetadata, QuarantineStatus};
 
 /// A single forward-and-revert database migration.
 #[derive(Clone, Copy, Debug)]
@@ -152,6 +154,29 @@ CREATE TABLE api_tokens (
 );
 ",
         down: "DROP TABLE api_tokens;\n",
+    },
+    Migration {
+        version: 7,
+        name: "quarantine_lifecycle",
+        up: "\
+ALTER TABLE quarantine_metadata ADD COLUMN kind TEXT NOT NULL DEFAULT 'lease';
+ALTER TABLE quarantine_metadata ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE quarantine_metadata ADD COLUMN idempotency_key TEXT;
+ALTER TABLE quarantine_metadata ADD COLUMN delete_reason TEXT;
+ALTER TABLE quarantine_metadata ADD COLUMN recovered_at INTEGER;
+ALTER TABLE quarantine_metadata ADD COLUMN deleted_at INTEGER;
+CREATE INDEX quarantine_metadata_kind_status_idx
+    ON quarantine_metadata (kind, status, quarantine_expires_at);
+",
+        down: "\
+DROP INDEX quarantine_metadata_kind_status_idx;
+ALTER TABLE quarantine_metadata DROP COLUMN deleted_at;
+ALTER TABLE quarantine_metadata DROP COLUMN recovered_at;
+ALTER TABLE quarantine_metadata DROP COLUMN delete_reason;
+ALTER TABLE quarantine_metadata DROP COLUMN idempotency_key;
+ALTER TABLE quarantine_metadata DROP COLUMN size_bytes;
+ALTER TABLE quarantine_metadata DROP COLUMN kind;
+",
     },
 ];
 
@@ -513,6 +538,203 @@ impl Store {
             route: route_from_str(&route_text)?,
         }))
     }
+
+    /// Records delivery metadata without touching aliases.
+    ///
+    /// Used when reconciliation rebuilds quarantine metadata from the mail
+    /// store and no delivery row exists. Recording is idempotent.
+    pub fn ensure_message(&self, message: &Message) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT OR IGNORE INTO messages
+                (id, sender, subject, received_at, route, primary_received)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                message.id,
+                message.sender,
+                message.subject,
+                message.received_at,
+                route_to_str(message.route),
+                message.primary_received,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Links a message to an alias, ignoring duplicates.
+    ///
+    /// Used when reconciliation rebuilds delivery metadata from the mail store.
+    pub fn link_message_alias(
+        &self,
+        message_id: MessageId,
+        alias_id: AliasId,
+    ) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT OR IGNORE INTO message_aliases (message_id, alias_id) VALUES (?1, ?2)",
+            params![message_id, alias_id],
+        )?;
+        Ok(())
+    }
+
+    /// Inserts quarantine metadata, leaving an existing row untouched.
+    pub fn insert_quarantine_metadata(
+        &self,
+        metadata: &QuarantineMetadata,
+    ) -> Result<(), StoreError> {
+        self.write_quarantine_metadata(metadata, true)
+    }
+
+    /// Inserts or replaces quarantine metadata.
+    pub fn upsert_quarantine_metadata(
+        &self,
+        metadata: &QuarantineMetadata,
+    ) -> Result<(), StoreError> {
+        self.write_quarantine_metadata(metadata, false)
+    }
+
+    fn write_quarantine_metadata(
+        &self,
+        metadata: &QuarantineMetadata,
+        keep_existing: bool,
+    ) -> Result<(), StoreError> {
+        let (verb, conflict) = if keep_existing {
+            ("INSERT OR IGNORE", "")
+        } else {
+            (
+                "INSERT",
+                "ON CONFLICT(message_id) DO UPDATE SET
+                    status = excluded.status,
+                    kind = excluded.kind,
+                    sender = excluded.sender,
+                    subject = excluded.subject,
+                    received_at = excluded.received_at,
+                    quarantine_expires_at = excluded.quarantine_expires_at,
+                    mailbox = excluded.mailbox,
+                    uidvalidity = excluded.uidvalidity,
+                    uid = excluded.uid,
+                    size_bytes = excluded.size_bytes,
+                    idempotency_key = excluded.idempotency_key,
+                    delete_reason = excluded.delete_reason,
+                    updated_at = excluded.updated_at,
+                    recovered_at = excluded.recovered_at,
+                    deleted_at = excluded.deleted_at",
+            )
+        };
+        let sql = format!(
+            "{verb} INTO quarantine_metadata (
+                id, message_id, status, kind, sender, subject, received_at,
+                quarantine_expires_at, mailbox, uidvalidity, uid, size_bytes,
+                idempotency_key, delete_reason, created_at, updated_at,
+                recovered_at, deleted_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                ?15, ?16, ?17, ?18
+            ) {conflict}"
+        );
+        let (mailbox, uidvalidity, uid) = match &metadata.locator {
+            Some(locator) => (
+                Some(locator.mailbox.clone()),
+                Some(locator.uidvalidity),
+                Some(locator.uid),
+            ),
+            None => (None, None, None),
+        };
+        self.connection.execute(
+            &sql,
+            params![
+                metadata.message_id.to_string(),
+                metadata.message_id,
+                quarantine_status_to_str(metadata.status),
+                quarantine_kind_to_str(metadata.kind),
+                metadata.sender,
+                metadata.subject,
+                metadata.received_at,
+                metadata.quarantine_expires_at,
+                mailbox,
+                uidvalidity,
+                uid,
+                metadata.size_bytes as i64,
+                metadata.idempotency_key,
+                metadata.delete_reason,
+                metadata.created_at,
+                metadata.updated_at,
+                metadata.recovered_at,
+                metadata.deleted_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Loads quarantine metadata by message identity.
+    pub fn get_quarantine_metadata(
+        &self,
+        message_id: MessageId,
+    ) -> Result<Option<QuarantineMetadata>, StoreError> {
+        let mut metadata = self
+            .connection
+            .query_row(
+                &format!(
+                    "SELECT {QUARANTINE_COLUMNS} FROM quarantine_metadata WHERE message_id = ?1"
+                ),
+                params![message_id],
+                row_to_quarantine,
+            )
+            .optional()?;
+        if let Some(metadata) = metadata.as_mut() {
+            metadata.alias_ids = self.quarantine_alias_ids(message_id)?;
+        }
+        Ok(metadata)
+    }
+
+    /// Lists quarantine metadata, oldest received first.
+    pub fn list_quarantine_metadata(&self) -> Result<Vec<QuarantineMetadata>, StoreError> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {QUARANTINE_COLUMNS} FROM quarantine_metadata
+             ORDER BY received_at ASC, message_id ASC"
+        ))?;
+        let rows = statement.query_map([], row_to_quarantine)?;
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        for entry in &mut entries {
+            entry.alias_ids = self.quarantine_alias_ids(entry.message_id)?;
+        }
+        Ok(entries)
+    }
+
+    /// Deletes quarantine metadata by message identity.
+    pub fn delete_quarantine_metadata(&self, message_id: MessageId) -> Result<bool, StoreError> {
+        let removed = self.connection.execute(
+            "DELETE FROM quarantine_metadata WHERE message_id = ?1",
+            params![message_id],
+        )?;
+        Ok(removed > 0)
+    }
+
+    /// Purges metadata for messages deleted at or before `cutoff`.
+    ///
+    /// Returns the number of rows removed.
+    pub fn purge_deleted_quarantine_metadata(
+        &self,
+        cutoff: crate::timestamp::Timestamp,
+    ) -> Result<usize, StoreError> {
+        let removed = self.connection.execute(
+            "DELETE FROM quarantine_metadata
+             WHERE status = 'deleted' AND deleted_at IS NOT NULL AND deleted_at <= ?1",
+            params![cutoff],
+        )?;
+        Ok(removed)
+    }
+
+    fn quarantine_alias_ids(&self, message_id: MessageId) -> Result<Vec<AliasId>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT alias_id FROM message_aliases WHERE message_id = ?1 ORDER BY alias_id",
+        )?;
+        let ids = statement
+            .query_map(params![message_id], |row| row.get::<_, AliasId>("alias_id"))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
 }
 
 fn route_to_str(route: Route) -> &'static str {
@@ -534,6 +756,89 @@ fn route_from_str(value: &str) -> rusqlite::Result<Route> {
             Box::new(StoreError::Corrupt(format!("unknown route: {other}"))),
         )),
     }
+}
+
+fn quarantine_status_to_str(status: QuarantineStatus) -> &'static str {
+    match status {
+        QuarantineStatus::Quarantined => "quarantined",
+        QuarantineStatus::Recovering => "recovering",
+        QuarantineStatus::Recovered => "recovered",
+        QuarantineStatus::Deleting => "deleting",
+        QuarantineStatus::Deleted => "deleted",
+    }
+}
+
+fn quarantine_status_from_str(value: &str) -> rusqlite::Result<QuarantineStatus> {
+    match value {
+        "quarantined" => Ok(QuarantineStatus::Quarantined),
+        "recovering" => Ok(QuarantineStatus::Recovering),
+        "recovered" => Ok(QuarantineStatus::Recovered),
+        "deleting" => Ok(QuarantineStatus::Deleting),
+        "deleted" => Ok(QuarantineStatus::Deleted),
+        other => Err(rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Text,
+            Box::new(StoreError::Corrupt(format!(
+                "unknown quarantine status: {other}"
+            ))),
+        )),
+    }
+}
+
+fn quarantine_kind_to_str(kind: QuarantineKind) -> &'static str {
+    match kind {
+        QuarantineKind::Lease => "lease",
+        QuarantineKind::Spam => "spam",
+    }
+}
+
+fn quarantine_kind_from_str(value: &str) -> rusqlite::Result<QuarantineKind> {
+    match value {
+        "lease" => Ok(QuarantineKind::Lease),
+        "spam" => Ok(QuarantineKind::Spam),
+        other => Err(rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Text,
+            Box::new(StoreError::Corrupt(format!(
+                "unknown quarantine kind: {other}"
+            ))),
+        )),
+    }
+}
+
+const QUARANTINE_COLUMNS: &str = "message_id, status, kind, sender, subject, received_at, \
+     quarantine_expires_at, mailbox, uidvalidity, uid, size_bytes, idempotency_key, \
+     delete_reason, created_at, updated_at, recovered_at, deleted_at";
+
+fn row_to_quarantine(row: &Row<'_>) -> rusqlite::Result<QuarantineMetadata> {
+    let status_text: String = row.get("status")?;
+    let kind_text: String = row.get("kind")?;
+    let mailbox: Option<String> = row.get("mailbox")?;
+    let uidvalidity: Option<u32> = row.get("uidvalidity")?;
+    let uid: Option<u32> = row.get("uid")?;
+    let locator = mailbox.map(|mailbox| MailboxLocator {
+        mailbox,
+        uidvalidity: uidvalidity.unwrap_or(0),
+        uid: uid.unwrap_or(0),
+    });
+    Ok(QuarantineMetadata {
+        message_id: row.get("message_id")?,
+        kind: quarantine_kind_from_str(&kind_text)?,
+        status: quarantine_status_from_str(&status_text)?,
+        alias_ids: Vec::new(),
+        sender: row.get("sender")?,
+        subject: row.get("subject")?,
+        received_at: row.get("received_at")?,
+        quarantine_expires_at: row.get("quarantine_expires_at")?,
+        locator,
+        size_bytes: row.get::<_, i64>("size_bytes")? as u64,
+        idempotency_key: row.get("idempotency_key")?,
+        delete_reason: row.get("delete_reason")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+        recovered_at: row.get("recovered_at")?,
+        deleted_at: row.get("deleted_at")?,
+    })
 }
 
 const ALIAS_COLUMNS: &str = "id, address, label, purpose, created_at, expires_at, disabled_at, \
@@ -596,10 +901,13 @@ fn audit_kind_from_str(value: &str) -> rusqlite::Result<AuditEventKind> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIGRATIONS, Store, StoreError, latest_version};
+    use super::{Store, StoreError, latest_version};
     use crate::address::CanonicalAddress;
     use crate::alias::{Alias, AliasId, DEFAULT_LEASE_SECONDS};
     use crate::audit::{AuditDetail, AuditEvent, AuditEventKind};
+    use crate::mail::store::MailboxLocator;
+    use crate::message::{Message, MessageId, Route};
+    use crate::quarantine::{QuarantineKind, QuarantineMetadata, QuarantineStatus};
     use crate::timestamp::Timestamp;
 
     fn at(value: &str) -> Timestamp {
@@ -634,6 +942,17 @@ mod tests {
             .unwrap()
     }
 
+    /// Tables created by the schema, in migration order.
+    const SCHEMA_TABLES: &[&str] = &[
+        "aliases",
+        "policy",
+        "messages",
+        "message_aliases",
+        "quarantine_metadata",
+        "audit_events",
+        "api_tokens",
+    ];
+
     #[test]
     fn migrates_forward_and_reverts_cleanly() {
         let mut store = Store::open_in_memory().unwrap();
@@ -641,21 +960,16 @@ mod tests {
 
         store.migrate().unwrap();
         assert_eq!(store.schema_version().unwrap(), latest_version());
-        for migration in MIGRATIONS {
-            assert!(
-                table_exists(&store, migration.name),
-                "missing table for migration {}",
-                migration.name
-            );
+        for table in SCHEMA_TABLES {
+            assert!(table_exists(&store, table), "missing table {table}");
         }
 
         store.migrate_to(0).unwrap();
         assert_eq!(store.schema_version().unwrap(), 0);
-        for migration in MIGRATIONS {
+        for table in SCHEMA_TABLES {
             assert!(
-                !table_exists(&store, migration.name),
-                "table {} survived revert",
-                migration.name
+                !table_exists(&store, table),
+                "table {table} survived revert"
             );
         }
 
@@ -807,5 +1121,103 @@ mod tests {
             events[0].detail.as_ref().unwrap().lease_seconds,
             Some(DEFAULT_LEASE_SECONDS)
         );
+    }
+
+    #[test]
+    fn quarantine_metadata_round_trips_and_purges() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        let value = alias(
+            "018f9b60-0000-7000-8000-000000000001",
+            "green.farm@example.com",
+        );
+        store.insert_alias(&value).unwrap();
+        let message = Message {
+            id: MessageId::new(),
+            alias_ids: vec![value.id],
+            primary_received: false,
+            sender: "sender@example.com".to_string(),
+            subject: "hello".to_string(),
+            received_at: at("2026-01-01T00:00:00Z"),
+            route: Route::Quarantine,
+        };
+        store.ensure_message(&message).unwrap();
+        store
+            .connection()
+            .execute(
+                "INSERT INTO message_aliases (message_id, alias_id) VALUES (?1, ?2)",
+                rusqlite::params![message.id, value.id],
+            )
+            .unwrap();
+
+        let metadata = QuarantineMetadata {
+            message_id: message.id,
+            kind: QuarantineKind::Lease,
+            status: QuarantineStatus::Quarantined,
+            alias_ids: vec![value.id],
+            sender: message.sender.clone(),
+            subject: message.subject.clone(),
+            received_at: message.received_at,
+            quarantine_expires_at: at("2026-01-31T00:00:00Z"),
+            locator: Some(MailboxLocator {
+                mailbox: "Aliases/Expired".to_string(),
+                uidvalidity: 1,
+                uid: 2,
+            }),
+            size_bytes: 123,
+            idempotency_key: None,
+            delete_reason: None,
+            created_at: at("2026-01-01T00:00:00Z"),
+            updated_at: at("2026-01-01T00:00:00Z"),
+            recovered_at: None,
+            deleted_at: None,
+        };
+        store.upsert_quarantine_metadata(&metadata).unwrap();
+        let loaded = store.get_quarantine_metadata(message.id).unwrap().unwrap();
+        assert_eq!(loaded, metadata);
+        assert_eq!(loaded.alias_ids, vec![value.id]);
+
+        // Insert-if-absent leaves the existing row untouched.
+        let mut changed = metadata.clone();
+        changed.status = QuarantineStatus::Recovered;
+        store.insert_quarantine_metadata(&changed).unwrap();
+        assert_eq!(
+            store
+                .get_quarantine_metadata(message.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            QuarantineStatus::Quarantined
+        );
+
+        // Upsert replaces.
+        store.upsert_quarantine_metadata(&changed).unwrap();
+        assert_eq!(
+            store
+                .get_quarantine_metadata(message.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            QuarantineStatus::Recovered
+        );
+
+        // Purge removes only deleted rows at or before the cutoff.
+        let mut deleted = changed.clone();
+        deleted.status = QuarantineStatus::Deleted;
+        deleted.deleted_at = Some(at("2026-01-02T00:00:00Z"));
+        store.upsert_quarantine_metadata(&deleted).unwrap();
+        assert_eq!(
+            store
+                .purge_deleted_quarantine_metadata(at("2026-01-01T00:00:00Z"))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .purge_deleted_quarantine_metadata(at("2026-01-03T00:00:00Z"))
+                .unwrap(),
+            1
+        );
+        assert!(store.get_quarantine_metadata(message.id).unwrap().is_none());
     }
 }

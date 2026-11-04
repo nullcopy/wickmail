@@ -219,6 +219,28 @@ let
     else:
         raise AssertionError("wickmail.service did not restart")
 
+    step("a quarantined message is recovered into the Inbox")
+    run(
+        "wickmail-server", "quarantine", "recover",
+        "--db", DB, "--maildir", MAILDIR, "--quarantine-dir", QUARANTINE,
+        "--message-id", quarantined,
+    )
+    inbox = run("wickmail-server", "mail-store", "list", "--maildir", MAILDIR)
+    recovered_inbox = [line.split()[0] for line in inbox.splitlines() if line.strip()]
+    assert quarantined in recovered_inbox, f"recovered message missing from Inbox: {inbox}"
+    assert recovered_inbox.count(quarantined) == 1, "recovered message was duplicated"
+    assert quarantined not in quarantine_list(), "quarantine copy survived recovery"
+
+    step("reconciliation and retention run cleanly")
+    run(
+        "wickmail-server", "quarantine", "reconcile",
+        "--db", DB, "--maildir", MAILDIR, "--quarantine-dir", QUARANTINE,
+    )
+    run(
+        "wickmail-server", "quarantine", "sweep",
+        "--db", DB, "--maildir", MAILDIR, "--quarantine-dir", QUARANTINE,
+    )
+
     step("all checks passed")
   '';
 in

@@ -23,5 +23,6 @@ pub use runtime::{MailPath, RuntimeError, ServerConfig, route_header_value, serv
 pub use socketmap::DEFAULT_SOCKETMAP_NAME;
 pub use spool::{Spool, SpoolEntry, SpoolError, SpoolMeta, SpoolStats};
 pub use store::{
-    AdapterError, MailStoreAdapter, MailboxLocator, MessageSummary, QUARANTINE_MAILBOX,
+    AdapterError, INBOX_MAILBOX, MailStoreAdapter, MailboxLocator, MessageSummary,
+    QUARANTINE_MAILBOX, SPAM_MAILBOX,
 };

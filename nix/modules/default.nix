@@ -103,6 +103,20 @@ in
       description = "Maildir root for the account and the quarantine mailbox.";
     };
 
+    maildir = mkOption {
+      type = types.path;
+      default = "${cfg.mailRoot}/Maildir";
+      defaultText = lib.literalExpression ''"''${config.services.wickmail.mailRoot}/Maildir"'';
+      description = "The account Maildir root used by reconciliation and retention.";
+    };
+
+    quarantineDir = mkOption {
+      type = types.path;
+      default = "${cfg.mailRoot}/quarantine/.Expired";
+      defaultText = lib.literalExpression ''"''${config.services.wickmail.mailRoot}/quarantine/.Expired"'';
+      description = "The on-disk directory for the Aliases/Expired quarantine mailbox.";
+    };
+
     user = mkOption {
       type = types.str;
       default = "wickmail";
@@ -299,6 +313,8 @@ in
           "--spool-dir ${cfg.stateDir}/spool"
           "--max-spool ${toString cfg.maxSpoolEntries}"
           "--hostname ${cfg.hostname}"
+          "--maildir ${cfg.maildir}"
+          "--quarantine-dir ${cfg.quarantineDir}"
         ];
         # The proxy needs access to the mail store and the Dovecot LMTP socket;
         # privilege separation is tracked separately.

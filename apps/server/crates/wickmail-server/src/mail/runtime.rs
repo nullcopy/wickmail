@@ -24,7 +24,9 @@ use crate::mail::lmtp::{
 use crate::mail::policy::RecipientPolicy;
 use crate::mail::socketmap::{self, DEFAULT_SOCKETMAP_NAME};
 use crate::mail::spool::{Spool, SpoolError, SpoolMeta};
+use crate::mail::store::MailStoreAdapter;
 use crate::message::{Message, Route};
+use crate::quarantine::{QuarantineError, QuarantineManager, RetentionPolicy};
 use crate::service::AliasService;
 
 /// Runtime configuration for the inbound mail path.
@@ -50,6 +52,14 @@ pub struct ServerConfig {
     pub socketmap_name: String,
     /// Hostname reported in LMTP greetings.
     pub hostname: String,
+    /// Maildir root for the account, when quarantine maintenance is enabled.
+    pub maildir: Option<PathBuf>,
+    /// Quarantine mailbox directory, when it lives outside the account root.
+    pub quarantine_dir: Option<PathBuf>,
+    /// Retention windows and quotas for quarantine and spam.
+    pub retention: RetentionPolicy,
+    /// How often reconciliation and retention run.
+    pub maintenance_interval: Duration,
 }
 
 impl ServerConfig {
@@ -74,6 +84,10 @@ impl ServerConfig {
             max_spool_entries: 10_000,
             socketmap_name: DEFAULT_SOCKETMAP_NAME.to_string(),
             hostname: "wickmail".to_string(),
+            maildir: None,
+            quarantine_dir: None,
+            retention: RetentionPolicy::default(),
+            maintenance_interval: Duration::from_secs(60),
         }
     }
 }
@@ -100,6 +114,8 @@ pub struct MailPath {
     service: Arc<Mutex<AliasService>>,
     primary: CanonicalAddress,
     clock: SharedClock,
+    adapter: Option<MailStoreAdapter>,
+    retention: RetentionPolicy,
 }
 
 impl MailPath {
@@ -119,12 +135,59 @@ impl MailPath {
             service,
             primary,
             clock,
+            adapter: None,
+            retention: RetentionPolicy::default(),
         }
+    }
+
+    /// Enables quarantine reconciliation and retention over the mail store.
+    pub fn enable_maintenance(&mut self, adapter: MailStoreAdapter, retention: RetentionPolicy) {
+        self.adapter = Some(adapter);
+        self.retention = retention;
     }
 
     /// The durable spool.
     pub fn spool(&self) -> &Arc<Spool> {
         &self.spool
+    }
+
+    /// Reconciles quarantine membership and enforces retention.
+    ///
+    /// Reconciliation repairs a crash or restore, then retention deletes
+    /// time-expired and over-quota messages oldest first. Messages in
+    /// `recovering` or `deleting` are never deleted.
+    pub fn maintain(&self) -> Result<(), QuarantineError> {
+        let Some(adapter) = &self.adapter else {
+            return Ok(());
+        };
+        let Ok(service) = self.service.lock() else {
+            return Ok(());
+        };
+        let manager =
+            QuarantineManager::new(service.store(), adapter, self.retention, self.clock.clone());
+        let reconciliation = manager.reconcile()?;
+        if reconciliation.metadata_rebuilt > 0
+            || reconciliation.completed_recoveries > 0
+            || reconciliation.completed_deletions > 0
+            || reconciliation.restored_to_quarantine > 0
+        {
+            eprintln!(
+                "wickmail: quarantine reconciliation repaired {} rebuilt {} recovered {} deleted {} requeued {}",
+                reconciliation.scanned,
+                reconciliation.metadata_rebuilt,
+                reconciliation.completed_recoveries,
+                reconciliation.completed_deletions,
+                reconciliation.restored_to_quarantine,
+            );
+        }
+        let retention = manager.retention_sweep()?;
+        if retention.deleted > 0 || retention.purged > 0 {
+            eprintln!(
+                "wickmail: quarantine retention deleted {} purged {}",
+                retention.deleted, retention.purged,
+            );
+        }
+        Ok(())
     }
 
     /// Evaluates an envelope, annotates it with trusted headers, and spools it.
@@ -285,12 +348,15 @@ fn annotate(
 pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
     let mut store = Store::open(&config.db_path)?;
     store.migrate()?;
-    let service = Arc::new(Mutex::new(AliasService::new(
-        store,
-        AliasGenerator::new(),
-        config.domain.clone(),
-        Arc::new(SystemClock) as SharedClock,
-    )));
+    let service = Arc::new(Mutex::new(
+        AliasService::new(
+            store,
+            AliasGenerator::new(),
+            config.domain.clone(),
+            Arc::new(SystemClock) as SharedClock,
+        )
+        .with_retention(config.retention),
+    ));
     let policy = Arc::new(RecipientPolicy::new(
         config.primary.clone(),
         service.clone(),
@@ -300,14 +366,22 @@ pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
         config.dovecot_lmtp.clone(),
         config.hostname.clone(),
     ));
-    let path = Arc::new(MailPath::new(
+    let mut path = MailPath::new(
         policy.clone(),
         spool.clone(),
         client,
         service,
         config.primary.clone(),
         Arc::new(SystemClock) as SharedClock,
-    ));
+    );
+    if let Some(maildir) = &config.maildir {
+        let adapter = match &config.quarantine_dir {
+            Some(quarantine_dir) => MailStoreAdapter::with_quarantine(maildir, quarantine_dir),
+            None => MailStoreAdapter::open(maildir),
+        };
+        path.enable_maintenance(adapter, config.retention);
+    }
+    let path = Arc::new(path);
 
     let policy_listener = socketmap::bind(&config.policy_socket)?;
     {
@@ -353,6 +427,22 @@ pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
                     }
                 }
                 std::thread::sleep(Duration::from_secs(1));
+            }
+        });
+    }
+
+    if config.maildir.is_some() {
+        if let Err(error) = path.maintain() {
+            eprintln!("wickmail: startup quarantine maintenance failed: {error}");
+        }
+        let path = path.clone();
+        let interval = config.maintenance_interval;
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(interval);
+                if let Err(error) = path.maintain() {
+                    eprintln!("wickmail: quarantine maintenance failed: {error}");
+                }
             }
         });
     }

@@ -19,6 +19,7 @@ use crate::lease::{
     evaluate_state, record_inbound,
 };
 use crate::message::{Message, MessageId};
+use crate::quarantine::{QuarantineMetadata, RetentionPolicy, kind_for_route};
 use crate::timestamp::Timestamp;
 
 /// Initial expiration choice for a new alias.
@@ -108,6 +109,7 @@ pub struct AliasService {
     generator: AliasGenerator,
     domain: Domain,
     clock: SharedClock,
+    retention: RetentionPolicy,
 }
 
 impl AliasService {
@@ -123,7 +125,14 @@ impl AliasService {
             generator,
             domain,
             clock,
+            retention: RetentionPolicy::default(),
         }
+    }
+
+    /// Sets the retention policy applied when quarantine metadata is recorded.
+    pub fn with_retention(mut self, retention: RetentionPolicy) -> Self {
+        self.retention = retention;
+        self
     }
 
     /// Creates a service with the curated generator and the wall clock.
@@ -418,9 +427,18 @@ impl AliasService {
     /// Records an accepted inbound delivery and its trusted provenance.
     ///
     /// Writes the message metadata and advances `last_inbound_at` for every
-    /// receiving alias in one transaction. The lease is never modified.
+    /// receiving alias in one transaction. Quarantined and spam messages also
+    /// get retention metadata. The lease is never modified.
     pub fn record_delivery(&self, message: &Message) -> Result<(), ServiceError> {
         self.store.record_inbound_delivery(message)?;
+        if let Some(kind) = kind_for_route(message.route) {
+            let expires_at = message
+                .received_at
+                .checked_add(self.retention.limits(kind).retention)
+                .unwrap_or(message.received_at);
+            let metadata = QuarantineMetadata::new(message, kind, expires_at, self.clock.now());
+            self.store.insert_quarantine_metadata(&metadata)?;
+        }
         Ok(())
     }
 
@@ -522,7 +540,8 @@ mod tests {
     use crate::db::Store;
     use crate::generator::AliasGenerator;
     use crate::lease::OutboundDecision;
-    use crate::message::MessageId;
+    use crate::message::{Message, MessageId, Route};
+    use crate::quarantine::{QuarantineKind, QuarantineStatus};
     use crate::timestamp::Timestamp;
     use std::sync::Arc;
 
@@ -733,6 +752,69 @@ mod tests {
         assert_eq!(
             kinds,
             vec![AuditEventKind::Created, AuditEventKind::Recovered]
+        );
+    }
+
+    #[test]
+    fn delivery_records_quarantine_metadata_for_quarantine_and_spam() {
+        let service = service_at("2026-01-04T00:00:00Z");
+        let alias = service.create(CreateAlias::default()).unwrap();
+        let quarantine = Message {
+            id: MessageId::new(),
+            alias_ids: vec![alias.id],
+            primary_received: false,
+            sender: "sender@example.com".to_string(),
+            subject: "old".to_string(),
+            received_at: at("2026-01-04T00:00:00Z"),
+            route: Route::Quarantine,
+        };
+        service.record_delivery(&quarantine).unwrap();
+        let metadata = service
+            .store()
+            .get_quarantine_metadata(quarantine.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(metadata.kind, QuarantineKind::Lease);
+        assert_eq!(metadata.status, QuarantineStatus::Quarantined);
+        assert_eq!(metadata.quarantine_expires_at, at("2026-02-03T00:00:00Z"));
+        assert_eq!(metadata.alias_ids, vec![alias.id]);
+        assert!(metadata.locator.is_none());
+
+        let spam = Message {
+            id: MessageId::new(),
+            route: Route::Spam,
+            ..quarantine
+        };
+        service.record_delivery(&spam).unwrap();
+        let metadata = service
+            .store()
+            .get_quarantine_metadata(spam.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(metadata.kind, QuarantineKind::Spam);
+        assert_eq!(metadata.quarantine_expires_at, at("2026-01-18T00:00:00Z"));
+    }
+
+    #[test]
+    fn inbox_delivery_records_no_quarantine_metadata() {
+        let service = service_at("2026-01-04T00:00:00Z");
+        let alias = service.create(CreateAlias::default()).unwrap();
+        let message = Message {
+            id: MessageId::new(),
+            alias_ids: vec![alias.id],
+            primary_received: false,
+            sender: "sender@example.com".to_string(),
+            subject: "hello".to_string(),
+            received_at: at("2026-01-04T00:00:00Z"),
+            route: Route::Inbox,
+        };
+        service.record_delivery(&message).unwrap();
+        assert!(
+            service
+                .store()
+                .get_quarantine_metadata(message.id)
+                .unwrap()
+                .is_none()
         );
     }
 
