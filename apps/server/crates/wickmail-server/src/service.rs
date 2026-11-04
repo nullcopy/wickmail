@@ -686,6 +686,34 @@ mod tests {
     }
 
     #[test]
+    fn policy_changes_never_change_an_alias_address() {
+        let service = service_at("2026-01-04T00:00:00Z");
+        let alias = service.create(CreateAlias::default()).unwrap();
+        let original = alias.address.clone();
+
+        service.renew(alias.id, Some(3600)).unwrap();
+        service.extend(alias.id, Some(3600)).unwrap();
+        service
+            .set_expiry(alias.id, at("2027-01-01T00:00:00Z"))
+            .unwrap();
+        service.remove_expiry(alias.id).unwrap();
+        service.disable(alias.id).unwrap();
+        service.enable(alias.id, None).unwrap();
+        service
+            .update_metadata(
+                alias.id,
+                UpdateAliasRequest {
+                    label: Some("Renamed".to_string()),
+                    purpose: Some("notes".to_string()),
+                    renew_on_outbound: Some(false),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(service.get(alias.id).unwrap().unwrap().address, original);
+    }
+
+    #[test]
     fn outbound_renewal_records_renewal_and_reply_events() {
         let service = service_at("2026-01-04T00:00:00Z");
         let alias = service.create(CreateAlias::default()).unwrap();
