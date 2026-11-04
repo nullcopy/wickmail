@@ -596,28 +596,31 @@ impl Store {
         metadata: &QuarantineMetadata,
         keep_existing: bool,
     ) -> Result<(), StoreError> {
-        let conflict = if keep_existing {
-            "ON CONFLICT(message_id) DO NOTHING"
+        let (verb, conflict) = if keep_existing {
+            ("INSERT OR IGNORE", "")
         } else {
-            "ON CONFLICT(message_id) DO UPDATE SET
-                status = excluded.status,
-                kind = excluded.kind,
-                sender = excluded.sender,
-                subject = excluded.subject,
-                received_at = excluded.received_at,
-                quarantine_expires_at = excluded.quarantine_expires_at,
-                mailbox = excluded.mailbox,
-                uidvalidity = excluded.uidvalidity,
-                uid = excluded.uid,
-                size_bytes = excluded.size_bytes,
-                idempotency_key = excluded.idempotency_key,
-                delete_reason = excluded.delete_reason,
-                updated_at = excluded.updated_at,
-                recovered_at = excluded.recovered_at,
-                deleted_at = excluded.deleted_at"
+            (
+                "INSERT",
+                "ON CONFLICT(message_id) DO UPDATE SET
+                    status = excluded.status,
+                    kind = excluded.kind,
+                    sender = excluded.sender,
+                    subject = excluded.subject,
+                    received_at = excluded.received_at,
+                    quarantine_expires_at = excluded.quarantine_expires_at,
+                    mailbox = excluded.mailbox,
+                    uidvalidity = excluded.uidvalidity,
+                    uid = excluded.uid,
+                    size_bytes = excluded.size_bytes,
+                    idempotency_key = excluded.idempotency_key,
+                    delete_reason = excluded.delete_reason,
+                    updated_at = excluded.updated_at,
+                    recovered_at = excluded.recovered_at,
+                    deleted_at = excluded.deleted_at",
+            )
         };
         let sql = format!(
-            "INSERT INTO quarantine_metadata (
+            "{verb} INTO quarantine_metadata (
                 id, message_id, status, kind, sender, subject, received_at,
                 quarantine_expires_at, mailbox, uidvalidity, uid, size_bytes,
                 idempotency_key, delete_reason, created_at, updated_at,
