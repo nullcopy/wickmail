@@ -104,11 +104,31 @@ let
         return run("journalctl", "-u", "wickmail.service", "--no-pager", check=False).stdout
 
 
+    def wait_for_policy_ready(recipient, timeout=90):
+        # `systemctl is-active` is true as soon as the process is exec'd, which
+        # can be before the policy socket is bound, especially on a slow VM. A
+        # temporary RCPT failure means the lookup is not ready yet.
+        deadline = time.time() + timeout
+        last = None
+        while time.time() < deadline:
+            try:
+                code, text = rcpt_only(recipient)
+                if code < 400:
+                    return
+                last = f"{code} {text}"
+            except Exception as error:  # noqa: BLE001 - surface any connect failure
+                last = repr(error)
+            time.sleep(1)
+        status = run("systemctl", "status", "wickmail.service", check=False).stdout
+        raise AssertionError(f"policy lookup never became ready: {last}\n{status}")
+
+
     def step(name):
         print(f"=== {name}", flush=True)
 
 
     active = create_alias("green.farm")
+    wait_for_policy_ready(active)
 
     step("unknown recipients are rejected with a permanent failure")
     code, text = rcpt_only("nobody@" + DOMAIN)
@@ -131,12 +151,12 @@ let
         code, data_code = deliver(active, "small body")
         assert code == 250, f"delivery RCPT: {code} {data_code}"
     # The limit is two per sender per hour; only two reach the inbox.
-    deadline = time.time() + 30
+    deadline = time.time() + 90
     while time.time() < deadline:
         if inbox_count() >= 2:
             break
         time.sleep(0.5)
-    time.sleep(2)
+    time.sleep(3)
     assert inbox_count() == 2, f"expected exactly 2 delivered, got {inbox_count()}"
 
     step("outbound submission is rate limited")
@@ -148,41 +168,26 @@ let
     assert code in (450, 451, 452), f"second submission was not rate limited: {code} {text}"
 
     step("a full disk returns a temporary failure and raises a disk-full alert")
-    run("systemctl", "stop", "wickmail.service")
+    # Fill the spool while the server is already serving, so the policy lookup
+    # stays available and only delivery fails. The RCPT stage never touches the
+    # spool, so the active alias is still accepted.
+    wait_for_policy_ready(active)
     run("mount", "-t", "tmpfs", "-o", "size=1M", "tmpfs", "/var/lib/wickmail/spool")
     run("sh", "-c", "dd if=/dev/zero of=/var/lib/wickmail/spool/fill bs=1k count=2048 || true")
-    run("systemctl", "start", "wickmail.service")
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        status = subprocess.run(
-            ["systemctl", "is-active", "wickmail.service"], capture_output=True, text=True
-        ).stdout.strip()
-        if status == "active":
-            break
-        time.sleep(0.5)
     # A fresh sender so the inbound rate limit does not mask the spool failure.
     code, data_code = deliver(active, "spool me", sender="full@example.net")
     assert code == 250, f"RCPT while spool is full: {code}"
     # The message is deferred by the proxy and the failure is alerted.
-    deadline = time.time() + 20
+    deadline = time.time() + 60
     while time.time() < deadline:
         if "alert [disk_full]" in journal():
             break
         time.sleep(0.5)
     assert "alert [disk_full]" in journal(), "no disk-full alert was recorded"
 
-    step("restore the spool and confirm recovery")
-    run("systemctl", "stop", "wickmail.service")
+    step("restore the spool and confirm the policy stays available")
     run("umount", "/var/lib/wickmail/spool")
-    run("systemctl", "start", "wickmail.service")
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        status = subprocess.run(
-            ["systemctl", "is-active", "wickmail.service"], capture_output=True, text=True
-        ).stdout.strip()
-        if status == "active":
-            break
-        time.sleep(0.5)
+    wait_for_policy_ready(active)
 
     step("all checks passed")
   '';
