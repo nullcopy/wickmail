@@ -1,4 +1,5 @@
 import type { ReplyContext, ReplyIdentity, ReplyRequest } from "wickmail-core";
+import type { SlidingWindowRateLimiter } from "../abuse/rateLimit.js";
 import { recordAuditEvent } from "../audit/events.js";
 import type { SqliteDatabase } from "../db/database.js";
 import type { MailStoreAdapter } from "../mailstore/adapter.js";
@@ -23,6 +24,10 @@ export interface ReplyClientDeps {
   now?: () => number;
   /** Generates the queue/message ID. Defaults to a UUIDv7. */
   generateMessageId?: (now: number) => string;
+  /** An outbound rate limiter. Rate limiting is skipped when absent. */
+  rateLimiter?: SlidingWindowRateLimiter;
+  /** Outbound submissions per minute. Required for rate limiting to apply. */
+  outboundPerMinute?: number;
 }
 
 type IdentityResolution = { ok: true; identity: ReplyIdentity } | { ok: false; reason: string };
@@ -110,6 +115,10 @@ export class ReplyClient {
         ...(this.deps.signer !== undefined ? { signer: this.deps.signer } : {}),
         ...(this.deps.generateMessageId !== undefined
           ? { generateMessageId: this.deps.generateMessageId }
+          : {}),
+        ...(this.deps.rateLimiter !== undefined ? { rateLimiter: this.deps.rateLimiter } : {}),
+        ...(this.deps.outboundPerMinute !== undefined
+          ? { outboundPerMinute: this.deps.outboundPerMinute }
           : {}),
       },
       {

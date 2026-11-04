@@ -48,8 +48,8 @@ describe("migrate", () => {
     const db = openDatabase({ path: ":memory:" });
     try {
       expect(appliedVersions(db)).toEqual([]);
-      expect(migrate(db, migrations)).toBe(1);
-      expect(appliedVersions(db)).toEqual([1]);
+      expect(migrate(db, migrations)).toBe(2);
+      expect(appliedVersions(db)).toEqual([1, 2]);
       expect(tables(db)).toEqual(
         expect.arrayContaining([
           "aliases",
@@ -104,10 +104,10 @@ describe("rollback", () => {
     const db = openDatabase({ path: ":memory:" });
     try {
       migrate(db, migrations);
-      expect(rollback(db, migrations, { steps: 1 })).toBe(1);
+      expect(rollback(db, migrations, { steps: 2 })).toBe(2);
       expect(appliedVersions(db)).toEqual([]);
       expect(tables(db)).not.toContain("aliases");
-      expect(migrate(db, migrations)).toBe(1);
+      expect(migrate(db, migrations)).toBe(2);
       expect(tables(db)).toContain("aliases");
     } finally {
       db.close();

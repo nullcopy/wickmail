@@ -19,6 +19,8 @@ export interface AliasRow {
   lastInboundAt: number | null;
   lastUserActivityAt: number | null;
   policyVersion: number;
+  /** The owning user, or null for rows created before ownership was recorded. */
+  ownerId: string | null;
 }
 
 /** Thrown when an alias does not exist. */
@@ -58,6 +60,7 @@ interface AliasQueryRow {
   lastInboundAt: number | null;
   lastUserActivityAt: number | null;
   policyVersion: number;
+  ownerId: string | null;
 }
 
 const SELECT_ALIAS = `
@@ -74,6 +77,7 @@ const SELECT_ALIAS = `
     a.last_inbound_at AS lastInboundAt,
     a.last_user_activity_at AS lastUserActivityAt,
     a.policy_version AS policyVersion,
+    a.owner_id AS ownerId,
     p.lease_duration_seconds AS leaseDurationSeconds,
     p.renew_on_outbound AS renewOnOutbound
   FROM aliases a
@@ -96,6 +100,7 @@ function mapRow(row: AliasQueryRow): AliasRow {
     lastInboundAt: row.lastInboundAt,
     lastUserActivityAt: row.lastUserActivityAt,
     policyVersion: row.policyVersion,
+    ownerId: row.ownerId,
   };
 }
 
@@ -109,6 +114,8 @@ export interface CreateAliasInput {
   expiresAt: number | null;
   leaseDurationSeconds: number;
   renewOnOutbound: boolean;
+  /** The owning user; defaults to null for callers that predate ownership. */
+  ownerId?: string | null;
 }
 
 /** Input for creating an alias with a freshly generated address. */
@@ -120,6 +127,8 @@ export interface CreateGeneratedAliasInput {
   expiresAt: number | null;
   leaseDurationSeconds: number;
   renewOnOutbound: boolean;
+  /** The owning user. */
+  ownerId?: string | null;
   /** Generator tuning, excluding the domain and uniqueness check. */
   generator?: Omit<AliasGeneratorOptions, "domain" | "isTaken">;
 }
@@ -148,6 +157,13 @@ export interface UpdateAliasOptions {
 export function getAliasById(db: SqliteDatabase, id: string): AliasRow | undefined {
   const row = db.prepare(`${SELECT_ALIAS} WHERE a.id = ?`).get(id) as AliasQueryRow | undefined;
   return row === undefined ? undefined : mapRow(row);
+}
+
+/** List every alias, oldest first, with a stable secondary sort by ID. */
+export function listAliases(db: SqliteDatabase): AliasRow[] {
+  return (
+    db.prepare(`${SELECT_ALIAS} ORDER BY a.created_at ASC, a.id ASC`).all() as AliasQueryRow[]
+  ).map(mapRow);
 }
 
 /** Fetch an alias by ID, throwing when it does not exist. */
@@ -192,8 +208,9 @@ export function createAlias(db: SqliteDatabase, input: CreateAliasInput): AliasR
     db.prepare(
       `INSERT INTO aliases (
          id, address, local_part, domain, label, purpose,
-         created_at, expires_at, disabled_at, last_inbound_at, last_user_activity_at, policy_version
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0)`,
+         created_at, expires_at, disabled_at, last_inbound_at, last_user_activity_at, policy_version,
+         owner_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?)`,
     ).run(
       id,
       canonicalAddress,
@@ -203,6 +220,7 @@ export function createAlias(db: SqliteDatabase, input: CreateAliasInput): AliasR
       input.purpose ?? null,
       input.createdAt,
       input.expiresAt,
+      input.ownerId ?? null,
     );
     db.prepare(
       `INSERT INTO alias_lease_policy (alias_id, lease_duration_seconds, renew_on_outbound)
@@ -235,6 +253,7 @@ export function createAliasWithGeneratedAddress(
     expiresAt: input.expiresAt,
     leaseDurationSeconds: input.leaseDurationSeconds,
     renewOnOutbound: input.renewOnOutbound,
+    ownerId: input.ownerId ?? null,
   });
 }
 
