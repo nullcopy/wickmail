@@ -9,3 +9,8 @@ result-*
 # Lock files
 flake.lock
 package-lock.json
+
+# Android build output
+apps/android/.gradle/
+apps/android/**/build/
+apps/android/gradle/wrapper/gradle-wrapper.jar
