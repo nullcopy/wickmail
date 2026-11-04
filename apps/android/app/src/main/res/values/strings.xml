@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Wickmail</string>
+
+    <string name="error_title">Can\'t reach Wickmail</string>
+    <string name="error_offline_message">Check your connection and try again. Nothing was queued or saved.</string>
+    <string name="error_generic_message">The management server could not be reached. Try again.</string>
+    <string name="retry">Retry</string>
+
+    <string name="lock_title">Wickmail is locked</string>
+    <string name="lock_subtitle">Unlock to continue</string>
+    <string name="lock_message">Unlock to access your aliases.</string>
+    <string name="unlock">Unlock</string>
+
+    <string name="copied">Copied</string>
+    <string name="share_via">Share alias</string>
+</resources>

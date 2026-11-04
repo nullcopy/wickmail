@@ -36,6 +36,30 @@
           # Node toolchain shared by the dev shell, checks, and packages.
           nodejs = pkgs.nodejs_24;
 
+          # Android SDK packages are unfree and need the SDK license accepted
+          # non-interactively. The SDK is x86_64-only in this environment, so
+          # everything below is gated on that system.
+          pkgsAndroid = import nixpkgs {
+            inherit system;
+            config = {
+              allowUnfree = true;
+              android_sdk.accept_license = true;
+            };
+          };
+
+          androidSdk =
+            (pkgsAndroid.androidenv.composeAndroidPackages {
+              buildToolsVersions = [ "35.0.0" ];
+              platformVersions = [ "35" ];
+              includeEmulator = false;
+              includeSystemImages = false;
+              includeNDK = false;
+              includeSources = false;
+            }).androidsdk;
+
+          androidSdkRoot = "${androidSdk}/libexec/android-sdk";
+          androidAapt2 = "${androidSdkRoot}/build-tools/35.0.0/aapt2";
+
           # The Rust server workspace is self-contained.
           serverSrc = lib.cleanSourceWith {
             name = "wickmail-server-src";
@@ -204,6 +228,116 @@
               '';
             };
 
+          # JUnit and Hamcrest for the pure-logic Kotlin check. Fixed-output
+          # fetches are allowed to reach the network inside the sandbox.
+          junit = pkgs.fetchMavenArtifact {
+            groupId = "junit";
+            artifactId = "junit";
+            version = "4.13.2";
+            sha256 = "sha256-jklbY0Rp1k+4rPo0laBly6zIoP/1XOHjEAe+TBbcV9M=";
+          };
+
+          hamcrest = pkgs.fetchMavenArtifact {
+            groupId = "org.hamcrest";
+            artifactId = "hamcrest-core";
+            version = "1.3";
+            sha256 = "sha256-Zv3vkelzk0jfeglqo4SlaF9Oh1WEzOiThqekclHE2Ok=";
+          };
+
+          # Offline structural verification of the Android project. The full
+          # APK build needs network for Gradle and Maven, so it runs in the dev
+          # shell instead; this check enforces the security invariants that
+          # must never regress.
+          androidShell =
+            pkgs.runCommand "wickmail-android-shell"
+              {
+                nativeBuildInputs = [ pkgs.gnugrep ];
+              }
+              ''
+                src=${./apps/android}
+                manifest="$src/app/src/main/AndroidManifest.xml"
+                network="$src/app/src/main/res/xml/network_security_config.xml"
+                wrapper="$src/gradle/wrapper/gradle-wrapper.properties"
+                appGradle="$src/app/build.gradle.kts"
+                kotlin="$src/app/src/main/kotlin/com/wickmail/android"
+
+                fail() {
+                  echo "android-shell check failed: $1" >&2
+                  exit 1
+                }
+
+                grep -q 'android:usesCleartextTraffic="false"' "$manifest" \
+                  || fail "the manifest must disable cleartext traffic"
+                grep -q 'android:networkSecurityConfig=' "$manifest" \
+                  || fail "the manifest must set a network security config"
+                grep -q 'android.permission.INTERNET' "$manifest" \
+                  || fail "the manifest must request the internet permission"
+                grep -q 'cleartextTrafficPermitted="false"' "$network" \
+                  || fail "the network security config must disable cleartext"
+                grep -q 'android:autoVerify="true"' "$manifest" \
+                  || fail "app links must opt into verification"
+                grep -q 'android:pathPrefix="/aliases/"' "$manifest" \
+                  || fail "app links must be scoped to alias details"
+                grep -q 'distributionSha256Sum=' "$wrapper" \
+                  || fail "the Gradle wrapper must pin a distribution checksum"
+                grep -q 'compileSdk = 35' "$appGradle" \
+                  || fail "compileSdk must be pinned"
+                grep -q 'minSdk = 26' "$appGradle" \
+                  || fail "minSdk must be pinned"
+                grep -q 'setWebContentsDebuggingEnabled(BuildConfig.DEBUG)' "$kotlin/MainActivity.kt" \
+                  || fail "WebView debugging must be limited to debug builds"
+                grep -q 'MIXED_CONTENT_NEVER_ALLOW' "$kotlin/MainActivity.kt" \
+                  || fail "mixed content must be disabled"
+                grep -q 'allowFileAccess = false' "$kotlin/MainActivity.kt" \
+                  || fail "file access must be disabled"
+
+                if grep -rq 'addJavascriptInterface' "$kotlin"; then
+                  fail "the shell must not expose a general JavaScript interface"
+                fi
+
+                touch "$out"
+              '';
+
+          # Compiles and runs the pure navigation and deep-link logic with the
+          # JVM test suite. This needs no Android SDK and no network.
+          androidLogic =
+            pkgs.runCommand "wickmail-android-logic"
+              {
+                nativeBuildInputs = [
+                  pkgs.kotlin
+                  pkgs.jdk17
+                ];
+              }
+              ''
+                export JAVA_HOME=${pkgs.jdk17.home}
+                work="$TMPDIR/logic"
+                mkdir -p "$work"
+                cp ${./apps/android/app/src/main/kotlin/com/wickmail/android/OriginPolicy.kt} "$work/"
+                cp ${./apps/android/app/src/main/kotlin/com/wickmail/android/DeepLinks.kt} "$work/"
+                cp ${./apps/android/app/src/test/kotlin/com/wickmail/android/OriginPolicyTest.kt} "$work/"
+                cp ${./apps/android/app/src/test/kotlin/com/wickmail/android/DeepLinksTest.kt} "$work/"
+                cat > "$work/Runner.kt" <<'RUNNER'
+                package com.wickmail.android
+
+                import org.junit.runner.JUnitCore
+
+                fun main() {
+                    val result = JUnitCore.runClasses(OriginPolicyTest::class.java, DeepLinksTest::class.java)
+                    result.failures.forEach { failure ->
+                        System.err.println(failure.toString())
+                        failure.exception.printStackTrace()
+                    }
+                    check(result.wasSuccessful()) {
+                        result.failureCount.toString() + " of " + result.runCount + " tests failed"
+                    }
+                    println(result.runCount.toString() + " android logic tests passed")
+                }
+                RUNNER
+                kotlinc "$work"/*.kt -cp "${junit.jar}:${hamcrest.jar}" -include-runtime -d "$work/tests.jar"
+                java -cp "$work/tests.jar:${junit.jar}:${hamcrest.jar}" com.wickmail.android.RunnerKt
+                touch "$out"
+              '';
+
           checks = {
             rust-fmt = mkRustCheck "fmt" "cargo fmt --all --check";
             rust-clippy = mkRustCheck "clippy" "cargo clippy --all-targets --all-features --locked --offline -- -D warnings";
@@ -225,6 +359,10 @@
                   nixfmt --check ${./flake.nix} ${./nix/modules/default.nix} ${./nix/tests/mail-path.nix}
                   touch $out
                 '';
+          }
+          // lib.optionalAttrs (system == "x86_64-linux") {
+            android-shell = androidShell;
+            android-logic = androidLogic;
           };
 
           serverApp = {
@@ -255,6 +393,11 @@
               pkgs.sqlite
               # Nix formatting.
               pkgs.nixfmt
+            ]
+            ++ lib.optionals (system == "x86_64-linux") [
+              # Android shell toolchain. Gradle comes from the wrapper.
+              pkgs.jdk17
+              androidSdk
             ];
 
             shellHook = ''
@@ -263,6 +406,14 @@
               echo "  cargo: $(cargo --version)"
               echo "  node:  $(node --version)"
               echo "  npm:   $(npm --version)"
+            ''
+            + lib.optionalString (system == "x86_64-linux") ''
+              export ANDROID_HOME=${androidSdkRoot}
+              export ANDROID_SDK_ROOT=${androidSdkRoot}
+              # NixOS cannot run the aapt2 that AGP downloads from Maven; use
+              # the SDK's patched aapt2 instead.
+              export GRADLE_OPTS="-Dorg.gradle.project.android.aapt2FromMavenOverride=${androidAapt2}"
+              echo "  android: ${androidSdkRoot}"
             '';
           };
         in
