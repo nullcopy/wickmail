@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Wickmail</string>
+    <string name="error_message">Check your connection and try again.</string>
+    <string name="retry">Retry</string>
+    <string name="config_error_message">This build has no management origin configured. See apps/android/README.md.</string>
+    <string name="lock_message">Wickmail is locked. Unlock to continue.</string>
+    <string name="unlock">Unlock</string>
+    <string name="biometric_title">Unlock Wickmail</string>
+    <string name="biometric_subtitle">Confirm it\'s you to continue.</string>
+    <string name="biometric_cancel">Cancel</string>
+    <string name="copied">Copied to clipboard</string>
+    <string name="share_title">Share alias</string>
+    <string name="open_external_failed">No app can open this link</string>
+</resources>
