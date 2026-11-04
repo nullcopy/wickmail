@@ -348,12 +348,15 @@ fn annotate(
 pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
     let mut store = Store::open(&config.db_path)?;
     store.migrate()?;
-    let service = Arc::new(Mutex::new(AliasService::new(
-        store,
-        AliasGenerator::new(),
-        config.domain.clone(),
-        Arc::new(SystemClock) as SharedClock,
-    )));
+    let service = Arc::new(Mutex::new(
+        AliasService::new(
+            store,
+            AliasGenerator::new(),
+            config.domain.clone(),
+            Arc::new(SystemClock) as SharedClock,
+        )
+        .with_retention(config.retention),
+    ));
     let policy = Arc::new(RecipientPolicy::new(
         config.primary.clone(),
         service.clone(),
