@@ -20,7 +20,10 @@ pub use delivery::{PlannedDelivery, plan};
 pub use headers::{MessageParts, WICKMAIL_HEADER_PREFIX, mailbox_addresses};
 pub use lmtp::{Envelope, LmtpClient, LmtpError, LmtpTarget, MessageHandler, RecipientReply};
 pub use policy::{PolicyDecision, PolicyError, RecipientKind, RecipientPolicy};
-pub use runtime::{MailPath, RuntimeError, ServerConfig, route_header_value, serve};
+pub use runtime::{
+    MailMetrics, MailMetricsSnapshot, MailPath, RuntimeError, ServerConfig, route_header_value,
+    serve,
+};
 pub use socketmap::DEFAULT_SOCKETMAP_NAME;
 pub use spool::{Spool, SpoolEntry, SpoolError, SpoolMeta, SpoolStats};
 pub use store::{

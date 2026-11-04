@@ -6,6 +6,7 @@
 
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -110,6 +111,53 @@ pub enum RuntimeError {
     Io(#[from] io::Error),
 }
 
+/// Operational counters for the inbound mail path.
+///
+/// They are the signals the design requires monitoring: policy-service
+/// failures, spool exhaustion, and forwarding failures. Counters are
+/// process-local and monotonic; the running server logs them alongside spool
+/// depth so an operator alert rule can fire on them.
+#[derive(Debug, Default)]
+pub struct MailMetrics {
+    policy_failures: AtomicU64,
+    spool_full: AtomicU64,
+    spool_unavailable: AtomicU64,
+    forwarding_failures: AtomicU64,
+    accepted: AtomicU64,
+    delivered: AtomicU64,
+}
+
+impl MailMetrics {
+    /// Reads every counter at one instant.
+    pub fn snapshot(&self) -> MailMetricsSnapshot {
+        MailMetricsSnapshot {
+            policy_failures: self.policy_failures.load(Ordering::Relaxed),
+            spool_full: self.spool_full.load(Ordering::Relaxed),
+            spool_unavailable: self.spool_unavailable.load(Ordering::Relaxed),
+            forwarding_failures: self.forwarding_failures.load(Ordering::Relaxed),
+            accepted: self.accepted.load(Ordering::Relaxed),
+            delivered: self.delivered.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// A point-in-time copy of [`MailMetrics`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MailMetricsSnapshot {
+    /// Delivery-time policy or database failures.
+    pub policy_failures: u64,
+    /// Messages rejected because the spool reached its entry limit.
+    pub spool_full: u64,
+    /// Messages rejected because the spool could not be read or written.
+    pub spool_unavailable: u64,
+    /// Spool entries that could not be loaded or forwarded.
+    pub forwarding_failures: u64,
+    /// Messages accepted and written to the spool.
+    pub accepted: u64,
+    /// Spool entries successfully delivered to Dovecot.
+    pub delivered: u64,
+}
+
 /// The composed inbound mail path: policy, spool, and Dovecot forwarder.
 pub struct MailPath {
     policy: Arc<RecipientPolicy>,
@@ -120,6 +168,7 @@ pub struct MailPath {
     clock: SharedClock,
     adapter: Option<MailStoreAdapter>,
     retention: RetentionPolicy,
+    metrics: MailMetrics,
 }
 
 impl MailPath {
@@ -141,6 +190,7 @@ impl MailPath {
             clock,
             adapter: None,
             retention: RetentionPolicy::default(),
+            metrics: MailMetrics::default(),
         }
     }
 
@@ -153,6 +203,11 @@ impl MailPath {
     /// The durable spool.
     pub fn spool(&self) -> &Arc<Spool> {
         &self.spool
+    }
+
+    /// A snapshot of the operational counters.
+    pub fn metrics(&self) -> MailMetricsSnapshot {
+        self.metrics.snapshot()
     }
 
     /// Reconciles quarantine membership and enforces retention.
@@ -214,6 +269,7 @@ impl MailPath {
         let planned = match plan(&parsed, spam, |address| self.policy.resolve(address)) {
             Ok(planned) => planned,
             Err(error) => {
+                self.metrics.policy_failures.fetch_add(1, Ordering::Relaxed);
                 eprintln!("wickmail: delivery policy unavailable: {error}");
                 return vec![RecipientReply::temporary("4.3.0 policy unavailable"); count];
             }
@@ -256,12 +312,20 @@ impl MailPath {
 
         match self.spool.enqueue(&message.to_bytes(), &meta) {
             Ok(()) => {
+                self.metrics.accepted.fetch_add(1, Ordering::Relaxed);
                 vec![
                     RecipientReply::accepted(format!("2.0.0 Ok: queued as {}", planned.message_id));
                     count
                 ]
             }
             Err(error) => {
+                if matches!(error, SpoolError::Full { .. }) {
+                    self.metrics.spool_full.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.metrics
+                        .spool_unavailable
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 eprintln!("wickmail: spool unavailable: {error}");
                 vec![RecipientReply::temporary("4.3.0 spool unavailable"); count]
             }
@@ -270,17 +334,40 @@ impl MailPath {
 
     /// Forwards every spooled message to Dovecot, recording provenance on
     /// success. Returns the number of messages delivered.
+    ///
+    /// A failure on one entry — an unreadable body, a failed removal, or a
+    /// rejected delivery — is recorded and skipped so it cannot block the
+    /// entries behind it. The failed entry stays in the spool and is retried.
     pub fn forward_pending(&self) -> Result<usize, SpoolError> {
         let mut delivered = 0;
         for entry in self.spool.entries()? {
-            let data = self.spool.load_message(entry.id)?;
+            let data = match self.spool.load_message(entry.id) {
+                Ok(data) => data,
+                Err(error) => {
+                    self.metrics
+                        .forwarding_failures
+                        .fetch_add(1, Ordering::Relaxed);
+                    eprintln!("wickmail: spool entry {} unreadable: {error}", entry.id);
+                    continue;
+                }
+            };
             match self
                 .client
                 .deliver(&entry.meta.sender, &entry.meta.dovecot_recipient, &data)
             {
                 Ok(()) => {
-                    self.spool.remove(entry.id)?;
+                    if let Err(error) = self.spool.remove(entry.id) {
+                        self.metrics
+                            .forwarding_failures
+                            .fetch_add(1, Ordering::Relaxed);
+                        eprintln!(
+                            "wickmail: delivered {} but could not clear it from the spool: {error}",
+                            entry.id
+                        );
+                        continue;
+                    }
                     delivered += 1;
+                    self.metrics.delivered.fetch_add(1, Ordering::Relaxed);
                     let message = Message {
                         id: entry.meta.message_id,
                         alias_ids: entry.meta.alias_ids.clone(),
@@ -297,6 +384,9 @@ impl MailPath {
                     }
                 }
                 Err(error) => {
+                    self.metrics
+                        .forwarding_failures
+                        .fetch_add(1, Ordering::Relaxed);
                     let mut meta = entry.meta.clone();
                     meta.attempts += 1;
                     let _ = self.spool.update_meta(&meta);
@@ -438,6 +528,7 @@ pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
     {
         let path = path.clone();
         std::thread::spawn(move || {
+            let mut reported = MailMetricsSnapshot::default();
             loop {
                 if let Err(error) = path.forward_pending() {
                     eprintln!("wickmail: spool scan failed: {error}");
@@ -449,6 +540,19 @@ pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
                             stats.depth, stats.oldest_age_seconds
                         );
                     }
+                }
+                let metrics = path.metrics();
+                if metrics != reported {
+                    eprintln!(
+                        "wickmail: metrics policy_failures={} spool_full={} spool_unavailable={} forwarding_failures={} accepted={} delivered={}",
+                        metrics.policy_failures,
+                        metrics.spool_full,
+                        metrics.spool_unavailable,
+                        metrics.forwarding_failures,
+                        metrics.accepted,
+                        metrics.delivered,
+                    );
+                    reported = metrics;
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }

@@ -428,6 +428,76 @@ fn the_primary_address_is_stripped_from_outbound_headers() {
 }
 
 #[test]
+fn a_mismatched_envelope_sender_is_rejected_before_queueing() {
+    let harness = Harness::new();
+    let alias = harness.create_alias("green.farm@example.com", at("2026-01-05T00:00:00Z"), true);
+    let raw = b"From: green.farm@example.com\r\nTo: sender@example.net\r\n\r\nbody".to_vec();
+    let result = harness
+        .client
+        .submit_outbound(wickmail_server::reply::SubmitOutbound {
+            identity: ReplyIdentityOption::Alias {
+                alias_id: alias.id,
+                address: alias.address.clone(),
+            },
+            raw,
+            recipients: vec!["sender@example.net".to_string()],
+            envelope_sender: Some("me@example.com".to_string()),
+            message_id: None,
+        });
+    assert!(matches!(result, Err(ReplyError::IdentityRejected(_))));
+    assert!(harness.queue.list().unwrap().is_empty());
+    // A rejected message never renews the alias.
+    assert_eq!(
+        harness.stored_alias(alias.id).expires_at,
+        Some(at("2026-01-05T00:00:00Z"))
+    );
+}
+
+#[test]
+fn multiple_from_mailboxes_are_rejected_before_queueing() {
+    let harness = Harness::new();
+    let alias = harness.create_alias("green.farm@example.com", at("2026-01-05T00:00:00Z"), true);
+    let raw =
+        b"From: green.farm@example.com, other@example.net\r\nTo: sender@example.net\r\n\r\nbody"
+            .to_vec();
+    let result = harness
+        .client
+        .submit_outbound(wickmail_server::reply::SubmitOutbound {
+            identity: ReplyIdentityOption::Alias {
+                alias_id: alias.id,
+                address: alias.address.clone(),
+            },
+            raw,
+            recipients: vec!["sender@example.net".to_string()],
+            envelope_sender: None,
+            message_id: None,
+        });
+    assert!(matches!(result, Err(ReplyError::IdentityRejected(_))));
+    assert!(harness.queue.list().unwrap().is_empty());
+}
+
+#[test]
+fn a_mismatched_sender_header_is_rejected_before_queueing() {
+    let harness = Harness::new();
+    let alias = harness.create_alias("green.farm@example.com", at("2026-01-05T00:00:00Z"), true);
+    let raw = b"From: green.farm@example.com\r\nSender: other@example.net\r\nTo: sender@example.net\r\n\r\nbody".to_vec();
+    let result = harness
+        .client
+        .submit_outbound(wickmail_server::reply::SubmitOutbound {
+            identity: ReplyIdentityOption::Alias {
+                alias_id: alias.id,
+                address: alias.address.clone(),
+            },
+            raw,
+            recipients: vec!["sender@example.net".to_string()],
+            envelope_sender: None,
+            message_id: None,
+        });
+    assert!(matches!(result, Err(ReplyError::IdentityRejected(_))));
+    assert!(harness.queue.list().unwrap().is_empty());
+}
+
+#[test]
 fn the_cli_drives_context_fetch_and_reply_submission() {
     let harness = Harness::new();
     let alias = harness.create_alias("green.farm@example.com", at("2035-01-01T00:00:00Z"), true);
