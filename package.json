@@ -1,0 +1,33 @@
+{
+  "name": "wickmail",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Wickmail monorepo: Svelte web app and shared TypeScript client",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "workspaces": [
+    "apps/web",
+    "packages/core"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "check": "npm run check --workspaces --if-present",
+    "lint": "eslint apps/web packages/core",
+    "test": "npm run test --workspaces --if-present",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.14.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-svelte": "^3.24.0",
+    "globals": "^17.14.0",
+    "prettier": "^3.9.10",
+    "prettier-plugin-svelte": "^4.1.1",
+    "typescript-eslint": "^8.72.1"
+  }
+}
