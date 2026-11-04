@@ -468,8 +468,8 @@ fn lease_detail(
 #[cfg(test)]
 mod tests {
     use super::{AliasService, CreateAlias, ExpiryChoice, ServiceError};
-    use crate::address::Domain;
-    use crate::alias::{AliasState, DEFAULT_LEASE_SECONDS};
+    use crate::address::{CanonicalAddress, Domain};
+    use crate::alias::{Alias, AliasId, AliasState, DEFAULT_LEASE_SECONDS};
     use crate::api::UpdateAliasRequest;
     use crate::audit::AuditEventKind;
     use crate::clock::FixedClock;
@@ -560,9 +560,26 @@ mod tests {
             Domain::parse("example.com").unwrap(),
             Arc::new(FixedClock::new(at("2026-01-01T00:00:00Z"))),
         );
-        // The four two-word combinations are taken first.
-        for _ in 0..4 {
-            service.create(CreateAlias::default()).unwrap();
+        // Pre-seed every two-word combination so generation must add a word.
+        for local in ["a.a", "a.b", "b.a", "b.b"] {
+            let address = CanonicalAddress::parse(&format!("{local}@example.com")).unwrap();
+            service
+                .store()
+                .insert_alias(&Alias {
+                    id: AliasId::new(),
+                    address,
+                    label: None,
+                    purpose: None,
+                    created_at: at("2026-01-01T00:00:00Z"),
+                    expires_at: None,
+                    disabled_at: None,
+                    lease_duration_seconds: DEFAULT_LEASE_SECONDS,
+                    renew_on_outbound: true,
+                    last_inbound_at: None,
+                    last_user_activity_at: None,
+                    policy_version: 0,
+                })
+                .unwrap();
         }
         let alias = service.create(CreateAlias::default()).unwrap();
         assert_eq!(alias.address.local_part().split('.').count(), 3);
