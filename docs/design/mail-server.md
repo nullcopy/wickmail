@@ -248,7 +248,7 @@ For each incoming message:
 4. Deliver accepted mail to the Wickmail LMTP proxy.
 5. Strip every client-supplied `X-Wickmail-*` header.
 6. Evaluate the alias state at delivery and record the trusted route.
-7. Add trusted headers: a stable `X-Wickmail-Message-ID`, one `X-Wickmail-Alias-ID` per receiving alias, `X-Wickmail-Route`, and `X-Wickmail-Received-At`.
+7. Add trusted headers: a stable `X-Wickmail-Message-ID`, one `X-Wickmail-Alias-ID` per receiving alias, `X-Wickmail-Route`, and `X-Wickmail-Received-At`. The route header carries `Inbox`, `Spam`, or `Quarantine`; the Sieve script maps `Quarantine` to the isolated `Aliases/Expired` mailbox.
 8. Write the message to the durable spool and acknowledge.
 9. Forward to Dovecot, where Sieve routes to `Inbox`, `Spam`, or `Aliases/Expired`.
 10. Record trusted provenance and update `last_inbound_at`.
@@ -403,6 +403,12 @@ SQLite runs with write-ahead logging, foreign keys enabled, a busy timeout, and 
 If alias policy cannot be evaluated, the server must not silently deliver or discard mail. It returns a temporary failure or holds the message in the spool.
 
 ## Testing
+
+A NixOS VM test runs Postfix, Rspamd, Dovecot, and `wickmail-server` together
+and exercises the real inbound path: active delivery to `Inbox`, expiry routing
+to `Aliases/Expired`, unknown and disabled rejection at RCPT, a temporary
+failure while the policy service is down, and stripping of spoofed
+`X-Wickmail-*` headers. It runs under `nix flake check`.
 
 Failure-injection tests must cover:
 

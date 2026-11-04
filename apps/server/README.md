@@ -34,10 +34,33 @@ The crate currently provides the alias core that the mail path and API build on:
 - `api` and `contract`: the management API request and response shapes and the
   JSON fixtures the TypeScript client validates.
 
-The `wickmail-server` binary reports its version and can apply migrations:
+## Inbound mail path (M2)
+
+The crate also implements the inbound mail path from ADR 0006:
+
+- `mail::policy`: canonical recipient lookup and the RCPT decision.
+- `mail::socketmap`: the Postfix socketmap server for RCPT policy lookups.
+- `mail::lmtp`: a minimal LMTP server and client.
+- `mail::spool`: a durable spool with acknowledge-after-spool writes.
+- `mail::delivery`: delivery-time recipient classification and routing.
+- `mail::store`: the internal mail-store adapter, the only read path into
+  `Aliases/Expired`.
+- `mail::runtime`: wires the components into the `wickmail-server serve`
+  process.
+
+The binary runs the mail path and provides administrative commands:
 
 ```text
+wickmail-server serve --db <db> --domain <domain> --primary <address> \
+  --policy-socket <path> --lmtp-socket <path> --dovecot-lmtp <spec> \
+  --spool-dir <dir>
 wickmail-server migrate <database>
+wickmail-server create-alias --db <db> --domain <domain> [--local-part <name>] \
+  [--lease <seconds> | --expires-at <rfc3339> | --never] [--disable]
+wickmail-server spool-stats --dir <spool>
+wickmail-server mail-store list|quarantine|read --maildir <dir> [--quarantine-dir <dir>]
 ```
 
-Run the tests with `nix develop -c cargo test -p wickmail-server`.
+Run the tests with `nix develop -c cargo test -p wickmail-server`. The NixOS VM
+test under `nix/tests/mail-path.nix` runs the full mail path with Postfix,
+Rspamd, and Dovecot.

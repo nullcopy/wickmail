@@ -9,11 +9,11 @@ secrets/
 config.local.*
 
 # Mail data and runtime state
-data/
-mail/
-maildir/
-queue/
-quarantine/
+/data/
+/mail/
+/maildir/
+/queue/
+/quarantine/
 
 # OS and editor files
 .DS_Store

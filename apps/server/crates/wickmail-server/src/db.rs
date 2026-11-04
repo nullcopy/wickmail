@@ -14,6 +14,7 @@ use thiserror::Error;
 use crate::address::CanonicalAddress;
 use crate::alias::{Alias, AliasId};
 use crate::audit::{AuditEvent, AuditEventId, AuditEventKind};
+use crate::message::{Message, MessageId, Route};
 
 /// A single forward-and-revert database migration.
 #[derive(Clone, Copy, Debug)]
@@ -432,6 +433,106 @@ impl Store {
             events.push(row?);
         }
         Ok(events)
+    }
+
+    /// Records an accepted inbound message and its provenance.
+    ///
+    /// The message row and its alias links are written in one transaction, and
+    /// each receiving alias's `last_inbound_at` is advanced without touching
+    /// `expires_at`. Recording is idempotent so a spool retry does not fail.
+    pub fn record_inbound_delivery(&self, message: &Message) -> Result<(), StoreError> {
+        let transaction = self.connection.unchecked_transaction()?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO messages
+                (id, sender, subject, received_at, route, primary_received)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                message.id,
+                message.sender,
+                message.subject,
+                message.received_at,
+                route_to_str(message.route),
+                message.primary_received,
+            ],
+        )?;
+        for alias_id in &message.alias_ids {
+            transaction.execute(
+                "INSERT OR IGNORE INTO message_aliases (message_id, alias_id)
+                 VALUES (?1, ?2)",
+                params![message.id, alias_id],
+            )?;
+            transaction.execute(
+                "UPDATE aliases SET
+                    last_inbound_at = max(coalesce(last_inbound_at, ?2), ?2),
+                    policy_version = policy_version + 1
+                 WHERE id = ?1",
+                params![alias_id, message.received_at],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Loads delivery metadata by message identity.
+    pub fn get_message(&self, id: MessageId) -> Result<Option<Message>, StoreError> {
+        let message = self
+            .connection
+            .query_row(
+                "SELECT id, sender, subject, received_at, route, primary_received
+                 FROM messages WHERE id = ?1",
+                params![id],
+                |row| {
+                    let route_text: String = row.get("route")?;
+                    Ok((
+                        row.get::<_, MessageId>("id")?,
+                        row.get::<_, String>("sender")?,
+                        row.get::<_, String>("subject")?,
+                        row.get::<_, crate::timestamp::Timestamp>("received_at")?,
+                        route_text,
+                        row.get::<_, bool>("primary_received")?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((id, sender, subject, received_at, route_text, primary_received)) = message else {
+            return Ok(None);
+        };
+        let mut statement = self.connection.prepare(
+            "SELECT alias_id FROM message_aliases WHERE message_id = ?1 ORDER BY alias_id",
+        )?;
+        let alias_ids = statement
+            .query_map(params![id], |row| row.get::<_, AliasId>("alias_id"))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Some(Message {
+            id,
+            alias_ids,
+            primary_received,
+            sender,
+            subject,
+            received_at,
+            route: route_from_str(&route_text)?,
+        }))
+    }
+}
+
+fn route_to_str(route: Route) -> &'static str {
+    match route {
+        Route::Inbox => "inbox",
+        Route::Spam => "spam",
+        Route::Quarantine => "quarantine",
+    }
+}
+
+fn route_from_str(value: &str) -> rusqlite::Result<Route> {
+    match value {
+        "inbox" => Ok(Route::Inbox),
+        "spam" => Ok(Route::Spam),
+        "quarantine" => Ok(Route::Quarantine),
+        other => Err(rusqlite::Error::FromSqlConversionFailure(
+            2,
+            rusqlite::types::Type::Text,
+            Box::new(StoreError::Corrupt(format!("unknown route: {other}"))),
+        )),
     }
 }
 
