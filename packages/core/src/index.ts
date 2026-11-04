@@ -9,3 +9,4 @@ export * from "./api.js";
 export * from "./auth.js";
 export * from "./quarantine.js";
 export * from "./error.js";
+export * from "./client.js";
