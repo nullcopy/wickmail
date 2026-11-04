@@ -17,7 +17,7 @@ The motivating scenario is an online purchase: the companion app generates a rea
 - Expired mail is quarantined for 30 days by default; spam retention is configured separately.
 - The web app is responsive and runs both in browsers and inside the Android WebView.
 - A Nix flake is the canonical build, development, test, and deployment interface. See [ADR 0011](../decisions/0011-nix-flake-first-class.md).
-- The server is implemented in Rust; the web app is TypeScript with React; the Android shell is Kotlin. See [ADR 0012](../decisions/0012-rust-server-typescript-clients.md).
+- The server is implemented in Rust; the web app is TypeScript with Svelte; the Android shell is Kotlin. See [ADR 0012](../decisions/0012-rust-server-typescript-clients.md) and [ADR 0013](../decisions/0013-typescript-svelte-web-app.md).
 - All timestamps are stored and evaluated in UTC.
 
 ## Non-goals for v1
@@ -34,7 +34,7 @@ The motivating scenario is an online purchase: the companion app generates a rea
 |---|---|---|
 | Product and repository | Wickmail | — |
 | Server and management API | `wickmail-server` | Rust |
-| Web management app | `wickmail-web` | TypeScript and React |
+| Web management app | `wickmail-web` | TypeScript and Svelte |
 | Android shell | `wickmail-android` | Kotlin |
 | Client schemas and API client | `wickmail-core` | TypeScript |
 
@@ -73,7 +73,7 @@ The motivating scenario is an online purchase: the companion app generates a rea
 wickmail/
   flake.nix         # build, development, test, and deployment entry point
   apps/server/      # Rust policy lookup, LMTP proxy, management API
-  apps/web/         # TypeScript and React management UI and reply composer
+  apps/web/         # TypeScript and Svelte management UI and reply composer
   apps/android/     # Kotlin Android WebView shell
   packages/core/    # TypeScript client schemas, types, and API client
   infra/            # deployment, mail config, backup scripts

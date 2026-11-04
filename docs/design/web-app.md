@@ -152,6 +152,10 @@ Show lifecycle events such as:
 - Do not inject credentials into page JavaScript.
 - Avoid caching message bodies or quarantine metadata in persistent offline storage for v1.
 
+## Implementation
+
+The app is a TypeScript Svelte single-page application built with Vite and served as static assets by the Rust server. Routing is client-side, and the app talks to the same-origin management API through the `wickmail-core` client package. Types are checked with `svelte-check`; formatting and linting use Prettier and ESLint with their Svelte plugins. See [ADR 0013](../decisions/0013-typescript-svelte-web-app.md).
+
 ## Acceptance criteria
 
 - A user can generate and copy a readable seven-day alias, such as `green.farm@example.com`, in under a minute.

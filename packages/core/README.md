@@ -11,6 +11,6 @@ Scope:
 
 `wickmail-core` is the client package for `wickmail-web`. The Rust server owns its own types and is the source of truth for the HTTP contract; this package mirrors it. It contains no lease evaluation or policy rules: the server is authoritative, and clients consume server-computed effective state and raw timestamps rather than deriving expiry, renewal, or routing decisions. The Android shell hosts the web app and does not consume this package directly.
 
-See the [design overview](../../docs/design/overview.md), [mail server design](../../docs/design/mail-server.md), and [ADR 0012](../../docs/decisions/0012-rust-server-typescript-clients.md).
+See the [design overview](../../docs/design/overview.md), [mail server design](../../docs/design/mail-server.md), and [ADR 0012](../../docs/decisions/0012-rust-server-typescript-clients.md) and [ADR 0013](../../docs/decisions/0013-typescript-svelte-web-app.md).
 
 Status: not implemented.

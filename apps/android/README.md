@@ -9,6 +9,6 @@ Scope:
 - Copy and share integration
 - Optional biometric lock and post-MVP notifications
 
-See [Android WebView shell design](../../docs/design/android.md) and [ADR 0012](../../docs/decisions/0012-rust-server-typescript-clients.md).
+See [Android WebView shell design](../../docs/design/android.md) and [ADR 0013](../../docs/decisions/0013-typescript-svelte-web-app.md).
 
 Status: not implemented.

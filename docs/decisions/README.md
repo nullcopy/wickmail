@@ -28,3 +28,4 @@ Records are numbered sequentially and monotonically. Numbers are never reused. A
 | [0010](0010-sqlite-for-single-user-v1.md) | Use SQLite for single-user v1 | Accepted |
 | [0011](0011-nix-flake-first-class.md) | Make a Nix flake the first-class build, development, and deployment interface | Accepted |
 | [0012](0012-rust-server-typescript-clients.md) | Implement the server in Rust | Accepted |
+| [0013](0013-typescript-svelte-web-app.md) | Implement the web app in TypeScript with Svelte | Accepted |
