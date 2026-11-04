@@ -153,6 +153,9 @@ pub struct MailMetrics {
     forwarding_failures: AtomicU64,
     accepted: AtomicU64,
     delivered: AtomicU64,
+    reconciliations: AtomicU64,
+    reconciliation_repairs: AtomicU64,
+    reconciliation_failures: AtomicU64,
 }
 
 impl MailMetrics {
@@ -165,6 +168,9 @@ impl MailMetrics {
             forwarding_failures: self.forwarding_failures.load(Ordering::Relaxed),
             accepted: self.accepted.load(Ordering::Relaxed),
             delivered: self.delivered.load(Ordering::Relaxed),
+            reconciliations: self.reconciliations.load(Ordering::Relaxed),
+            reconciliation_repairs: self.reconciliation_repairs.load(Ordering::Relaxed),
+            reconciliation_failures: self.reconciliation_failures.load(Ordering::Relaxed),
         }
     }
 }
@@ -184,6 +190,12 @@ pub struct MailMetricsSnapshot {
     pub accepted: u64,
     /// Spool entries successfully delivered to Dovecot.
     pub delivered: u64,
+    /// Completed reconciliation passes.
+    pub reconciliations: u64,
+    /// Reconciliation passes that repaired either store.
+    pub reconciliation_repairs: u64,
+    /// Reconciliation passes that failed.
+    pub reconciliation_failures: u64,
 }
 
 /// The composed inbound mail path: policy, spool, and Dovecot forwarder.
@@ -279,12 +291,26 @@ impl MailPath {
         };
         let manager =
             QuarantineManager::new(service.store(), adapter, self.retention, self.clock.clone());
-        let reconciliation = manager.reconcile()?;
+        let reconciliation = match manager.reconcile() {
+            Ok(report) => report,
+            Err(error) => {
+                self.metrics
+                    .reconciliation_failures
+                    .fetch_add(1, Ordering::Relaxed);
+                return Err(error);
+            }
+        };
+        self.metrics.reconciliations.fetch_add(1, Ordering::Relaxed);
         if reconciliation.metadata_rebuilt > 0
             || reconciliation.completed_recoveries > 0
             || reconciliation.completed_deletions > 0
             || reconciliation.restored_to_quarantine > 0
+            || reconciliation.removed_duplicate_copies > 0
+            || reconciliation.marked_deleted > 0
         {
+            self.metrics
+                .reconciliation_repairs
+                .fetch_add(1, Ordering::Relaxed);
             eprintln!(
                 "wickmail: quarantine reconciliation repaired {} rebuilt {} recovered {} deleted {} requeued {}",
                 reconciliation.scanned,
@@ -750,13 +776,16 @@ pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
                 let metrics = path.metrics();
                 if metrics != reported {
                     eprintln!(
-                        "wickmail: metrics policy_failures={} spool_full={} spool_unavailable={} forwarding_failures={} accepted={} delivered={}",
+                        "wickmail: metrics policy_failures={} spool_full={} spool_unavailable={} forwarding_failures={} accepted={} delivered={} reconciliations={} reconciliation_repairs={} reconciliation_failures={}",
                         metrics.policy_failures,
                         metrics.spool_full,
                         metrics.spool_unavailable,
                         metrics.forwarding_failures,
                         metrics.accepted,
                         metrics.delivered,
+                        metrics.reconciliations,
+                        metrics.reconciliation_repairs,
+                        metrics.reconciliation_failures,
                     );
                     reported = metrics;
                 }

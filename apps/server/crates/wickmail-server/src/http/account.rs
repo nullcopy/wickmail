@@ -5,6 +5,7 @@ use axum::extract::State;
 use axum::http::header;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 
+use crate::abuse::AlertKind;
 use crate::api::{
     LoginRequest, MailCredentialResponse, RecoverRequest, RotateMailCredentialRequest,
     RotateMailCredentialResponse, SessionInfo, SessionResponse, SetupRequest, SetupResponse,
@@ -23,7 +24,13 @@ pub async fn setup(
     limit_auth(&state)?;
     let service = state.lock_service();
     let identity = state.identity(&service);
-    let user = identity.complete_setup(&body.setup_token, &body.password)?;
+    let user = match identity.complete_setup(&body.setup_token, &body.password) {
+        Ok(user) => user,
+        Err(error) => {
+            alert_auth_failure(&state, "first-run setup failed");
+            return Err(error.into());
+        }
+    };
     Ok(Json(SetupResponse {
         user: UserResponse::from(user),
     }))
@@ -37,7 +44,13 @@ pub async fn login(
     limit_auth(&state)?;
     let service = state.lock_service();
     let identity = state.identity(&service);
-    let (session, token) = identity.login(&body.password)?;
+    let (session, token) = match identity.login(&body.password) {
+        Ok(value) => value,
+        Err(error) => {
+            alert_auth_failure(&state, "management login failed");
+            return Err(error.into());
+        }
+    };
     let csrf_token = session.csrf_token.clone();
     let response = SessionResponse {
         session: SessionInfo::from(session),
@@ -97,7 +110,13 @@ pub async fn recover(
     limit_auth(&state)?;
     let service = state.lock_service();
     let identity = state.identity(&service);
-    let user = identity.recover(&body.code, &body.password)?;
+    let user = match identity.recover(&body.code, &body.password) {
+        Ok(user) => user,
+        Err(error) => {
+            alert_auth_failure(&state, "account recovery failed");
+            return Err(error.into());
+        }
+    };
     Ok(Json(SetupResponse {
         user: UserResponse::from(user),
     }))
@@ -153,5 +172,15 @@ fn limit_auth(state: &AppState) -> Result<(), ApiError> {
     state
         .auth_limiter
         .check_global(state.config.login_rate, state.now())
-        .map_err(|limited| ApiError::too_many_requests(limited.retry_after_seconds))
+        .map_err(|limited| {
+            alert_auth_failure(state, "management authentication rate limit reached");
+            ApiError::too_many_requests(limited.retry_after_seconds)
+        })
+}
+
+/// Records a failed authentication attempt so an operator alert can fire.
+fn alert_auth_failure(state: &AppState, message: &str) {
+    state
+        .alerter
+        .alert(AlertKind::AuthenticationFailure, message);
 }
