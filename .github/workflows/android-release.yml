@@ -1,0 +1,73 @@
+name: Android release
+
+on:
+  push:
+    tags:
+      - "android-v*"
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: Management origin to bake into the build
+        required: false
+        default: https://wickmail.example
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Sign and publish
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up the JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Restore the upload keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+
+      - name: Write the signing properties
+        env:
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          cat > keystore.properties <<EOF
+          storeFile=release.keystore
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Build the signed release
+        run: |
+          ./gradlew --no-daemon \
+            -PwickmailManagementOrigin="${{ github.event.inputs.origin || 'https://wickmail.example' }}" \
+            bundleRelease assembleRelease
+
+      - name: Write checksums
+        run: |
+          sha256sum \
+            app/build/outputs/apk/release/*.apk \
+            app/build/outputs/bundle/release/*.aab > checksums.txt
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/android/app/build/outputs/apk/release/*.apk
+            apps/android/app/build/outputs/bundle/release/*.aab
+            apps/android/checksums.txt
