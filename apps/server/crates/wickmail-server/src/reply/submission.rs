@@ -55,7 +55,11 @@ pub fn submit_reply(
 ) -> Result<ReplyResponse, ReplyError> {
     let context = fetch_reply_context(service.store(), mail, message_id, primary)?
         .ok_or(ReplyError::MessageNotFound(message_id))?;
-    let identity = resolve_reply_identity(&context.identity, request.alias_id)?;
+    let identity = if request.primary.unwrap_or(false) {
+        select_primary(&context.identity)?
+    } else {
+        resolve_reply_identity(&context.identity, request.alias_id)?
+    };
     let to = context.from.clone().ok_or(ReplyError::NoSender)?;
     let outbound_id = MessageId::new();
     let raw = compose_reply(&ComposeReply {
@@ -105,6 +109,16 @@ pub fn resolve_reply_identity(
             .clone()
             .ok_or(ReplyError::IdentityRequired),
     }
+}
+
+/// Selects the account's primary identity from the offered options.
+fn select_primary(decision: &ReplyIdentityDecision) -> Result<ReplyIdentityOption, ReplyError> {
+    decision
+        .options
+        .iter()
+        .find(|option| matches!(option, ReplyIdentityOption::Primary { .. }))
+        .cloned()
+        .ok_or(ReplyError::IdentityNotAllowed)
 }
 
 /// Submits an authenticated outbound message and renews its alias.

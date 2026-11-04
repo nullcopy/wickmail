@@ -23,6 +23,9 @@ import type {
   ExpiryRequest,
   IssuedTokenResponse,
   MailCredentialResponse,
+  Message,
+  MessageListResponse,
+  MessageRoute,
   PasskeyResponse,
   Provenance,
   QuarantineListResponse,
@@ -200,6 +203,23 @@ const aliasListResponse: Parser<AliasListResponse> = object<AliasListResponse>({
   nextCursor: nullable(string),
 });
 
+const messageRoute: Parser<MessageRoute> = oneOf("inbox", "spam", "quarantine");
+
+const message: Parser<Message> = object<Message>({
+  messageId: string,
+  aliasIds: arrayOf(string),
+  primaryReceived: boolean,
+  sender: string,
+  subject: string,
+  receivedAt: string,
+  route: messageRoute,
+});
+
+const messageListResponse: Parser<MessageListResponse> = object<MessageListResponse>({
+  items: arrayOf(message),
+  nextCursor: nullable(string),
+});
+
 const auditDetail: Parser<AuditDetail> = object<AuditDetail>({
   previousExpiresAt: nullable(string),
   expiresAt: nullable(string),
@@ -262,6 +282,7 @@ const replyContext: Parser<ReplyContext> = object<ReplyContext>({
 
 const replyRequest: Parser<ReplyRequest> = object<ReplyRequest>({
   aliasId: nullable(string),
+  primary: nullable(boolean),
   body: string,
   quotedText: nullable(string),
 });
@@ -409,6 +430,16 @@ export function parseAliasListResponse(value: unknown, path = "$"): AliasListRes
   return aliasListResponse(value, path);
 }
 
+/** Validates a message payload. */
+export function parseMessage(value: unknown, path = "$"): Message {
+  return message(value, path);
+}
+
+/** Validates a message list payload. */
+export function parseMessageListResponse(value: unknown, path = "$"): MessageListResponse {
+  return messageListResponse(value, path);
+}
+
 /** Validates a create-alias request payload. */
 export function parseCreateAliasRequest(value: unknown, path = "$"): CreateAliasRequest {
   return createAliasRequest(value, path);
@@ -492,6 +523,11 @@ export function parseIssuedTokenResponse(value: unknown, path = "$"): IssuedToke
 /** Validates a token list payload. */
 export function parseTokenListResponse(value: unknown, path = "$"): TokenListResponse {
   return tokenListResponse(value, path);
+}
+
+/** Validates a single API token payload. */
+export function parseApiToken(value: unknown, path = "$"): ApiToken {
+  return apiToken(value, path);
 }
 
 /** Validates a quarantine payload. */

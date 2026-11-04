@@ -585,6 +585,69 @@ async fn reply_context_is_scoped_and_reply_renews_the_alias() {
 }
 
 #[tokio::test]
+async fn messages_list_exposes_recent_delivery_metadata() {
+    let harness = Harness::new();
+    let (cookie, csrf) = harness.setup_and_login().await;
+    let auth = [("cookie", cookie.as_str()), ("x-csrf-token", csrf.as_str())];
+
+    let (alias_id, message_id) = {
+        let service = harness.service();
+        let alias = service
+            .create(CreateAlias {
+                expiry: ExpiryChoice::LeaseSeconds(Some(3_600)),
+                ..CreateAlias::default()
+            })
+            .unwrap();
+        let message_id = MessageId::new();
+        service
+            .record_delivery(&Message {
+                id: message_id,
+                alias_ids: vec![alias.id],
+                primary_received: false,
+                sender: "store@example.com".to_string(),
+                subject: "Your order".to_string(),
+                received_at: at(NOW),
+                route: Route::Inbox,
+            })
+            .unwrap();
+        (alias.id, message_id)
+    };
+
+    let (status, body, _) = harness.call("GET", "/v1/messages", None, &auth).await;
+    assert_eq!(status, StatusCode::OK);
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["messageId"], message_id.to_string());
+    assert_eq!(items[0]["sender"], "store@example.com");
+    assert_eq!(items[0]["route"], "inbox");
+    // The list carries delivery metadata only, never a body.
+    assert!(items[0].get("body").is_none());
+
+    // Filtering by alias narrows the list.
+    let (status, body, _) = harness
+        .call(
+            "GET",
+            &format!("/v1/messages?aliasId={alias_id}"),
+            None,
+            &auth,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+
+    let (status, body, _) = harness
+        .call(
+            "GET",
+            &format!("/v1/messages?aliasId={}", AliasId::new()),
+            None,
+            &auth,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
 async fn static_assets_are_served_from_the_api_origin() {
     let harness = Harness::new();
     let (status, _, headers) = harness.call("GET", "/", None, &[]).await;

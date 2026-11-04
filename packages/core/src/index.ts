@@ -32,4 +32,4 @@ export function isActive(alias: Alias): boolean {
  * This must equal the server's `API_CONTRACT_VERSION`; the contract fixture
  * test enforces it.
  */
-export const API_CONTRACT_VERSION = "1.2.0";
+export const API_CONTRACT_VERSION = "1.4.0";

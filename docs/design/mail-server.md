@@ -353,14 +353,17 @@ POST   /v1/quarantine/{id}/delete
 
 `recover` accepts an option to renew or enable the alias.
 
-### Reply operations
+### Message operations
 
 ```text
+GET    /v1/messages
 GET    /v1/messages/{id}/reply-context
 POST   /v1/messages/{id}/reply
 ```
 
-`reply-context` returns the sanitized sender, subject, text, and trusted provenance needed to compose a reply. It does not turn the app into a general message browser. `reply` accepts the selected alias, body, and optional quoted text, and returns the queued result. Sending a reply renews the alias according to its policy.
+`GET /v1/messages` returns a limited recent-message list of delivery metadata tied to aliases and quarantine: the sender, subject, received time, route, and trusted provenance, but never a message body. It supports filtering by alias, sender or subject, and received-time range, with cursor pagination.
+
+`reply-context` returns the sanitized sender, subject, text, and trusted provenance needed to compose a reply. It does not turn the app into a general message browser. `reply` accepts the selected alias or the primary identity, the body, and optional quoted text, and returns the queued result. Sending a reply renews the alias according to its policy.
 
 ### Authentication and authorization
 

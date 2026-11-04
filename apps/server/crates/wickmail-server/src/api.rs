@@ -12,11 +12,11 @@ use crate::alias::{Alias, AliasId, AliasState};
 use crate::audit::{AuditDetail, AuditEvent, AuditEventId, AuditEventKind};
 use crate::identity::{SessionId, UserId};
 use crate::lease::evaluate_state;
-use crate::message::{MessageId, Provenance};
+use crate::message::{Message, MessageId, Provenance, Route};
 use crate::timestamp::Timestamp;
 
 /// Version of the management API contract.
-pub const API_CONTRACT_VERSION: &str = "1.2.0";
+pub const API_CONTRACT_VERSION: &str = "1.4.0";
 
 /// Body of `POST /v1/aliases`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +161,53 @@ pub struct AliasListResponse {
     pub next_cursor: Option<String>,
 }
 
+/// A recent message as returned by `GET /v1/messages`.
+///
+/// This is delivery metadata only: it carries the envelope sender, subject,
+/// and trusted provenance, but never a message body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageResponse {
+    /// Stable message identity.
+    pub message_id: MessageId,
+    /// Aliases that received the message.
+    pub alias_ids: Vec<AliasId>,
+    /// Whether the primary address received the message.
+    pub primary_received: bool,
+    /// Envelope sender.
+    pub sender: String,
+    /// Subject line.
+    pub subject: String,
+    /// When the message was accepted.
+    pub received_at: Timestamp,
+    /// Trusted route: inbox, spam, or quarantine.
+    pub route: Route,
+}
+
+impl From<Message> for MessageResponse {
+    fn from(message: Message) -> Self {
+        Self {
+            message_id: message.id,
+            alias_ids: message.alias_ids,
+            primary_received: message.primary_received,
+            sender: message.sender,
+            subject: message.subject,
+            received_at: message.received_at,
+            route: message.route,
+        }
+    }
+}
+
+/// Response of `GET /v1/messages`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageListResponse {
+    /// The page of recent messages.
+    pub items: Vec<MessageResponse>,
+    /// Cursor for the next page, or `null`.
+    pub next_cursor: Option<String>,
+}
+
 /// An audit event as returned by `GET /v1/aliases/{id}/events`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -294,13 +341,16 @@ pub struct ReplyContextResponse {
 
 /// Body of `POST /v1/messages/{id}/reply`.
 ///
-/// `alias_id` selects an owned alias that received the message; omitting it
-/// uses the default identity from provenance.
+/// `alias_id` selects an owned alias that received the message; `primary`
+/// selects the account's primary address. Omitting both uses the default
+/// identity from provenance. `primary` takes precedence when both are set.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyRequest {
     /// Alias to send as, or `None` for the default identity.
     pub alias_id: Option<AliasId>,
+    /// Send as the account's primary address.
+    pub primary: Option<bool>,
     /// Message body.
     pub body: String,
     /// Optional quoted text.

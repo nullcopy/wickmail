@@ -31,4 +31,19 @@ export default [
       },
     },
   },
+  {
+    files: ["**/*.svelte.ts"],
+    languageOptions: {
+      parser: ts.parser,
+      globals: {
+        ...globals.browser,
+        $state: "readonly",
+        $derived: "readonly",
+        $effect: "readonly",
+        $props: "readonly",
+        $bindable: "readonly",
+        $inspect: "readonly",
+      },
+    },
+  },
 ];

@@ -213,7 +213,7 @@
             web-core-check = mkNpmCheck "core-check" "npm run check --workspace=@wickmail/core";
             web-prettier = mkNpmCheck "prettier" "npm run format:check";
             web-eslint = mkNpmCheck "eslint" "npm run lint";
-            web-test = mkNpmCheck "test" "npm run test --workspace=@wickmail/core";
+            web-test = mkNpmCheck "test" "npm run test";
             web-build = mkNpmCheck "build" "npm run build --workspace=@wickmail/web";
 
             nix-fmt =

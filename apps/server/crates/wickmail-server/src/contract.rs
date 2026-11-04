@@ -16,15 +16,16 @@ use crate::alias::{AliasId, AliasState, DEFAULT_LEASE_SECONDS};
 use crate::api::{
     API_CONTRACT_VERSION, AliasEventResponse, AliasListResponse, AliasResponse, ApiTokenResponse,
     CreateAliasRequest, CreateTokenRequest, DurationRequest, EnableRequest, ErrorResponse,
-    ExpiryRequest, IssuedTokenResponse, MailCredentialResponse, PasskeyResponse,
-    ProvenanceResponse, QuarantineListResponse, QuarantineResponse, RecoverQuarantineRequest,
-    ReplyContextResponse, ReplyIdentityDecision, ReplyIdentityOption, ReplyIdentitySelection,
-    ReplyRequest, ReplyResponse, RotateMailCredentialResponse, SessionInfo, SessionResponse,
-    SetExpiryRequest, SetupRequest, TokenListResponse, UpdateAliasRequest, UserResponse,
+    ExpiryRequest, IssuedTokenResponse, MailCredentialResponse, MessageListResponse,
+    MessageResponse, PasskeyResponse, ProvenanceResponse, QuarantineListResponse,
+    QuarantineResponse, RecoverQuarantineRequest, ReplyContextResponse, ReplyIdentityDecision,
+    ReplyIdentityOption, ReplyIdentitySelection, ReplyRequest, ReplyResponse,
+    RotateMailCredentialResponse, SessionInfo, SessionResponse, SetExpiryRequest, SetupRequest,
+    TokenListResponse, UpdateAliasRequest, UserResponse,
 };
 use crate::audit::{AuditDetail, AuditEvent, AuditEventId, AuditEventKind};
 use crate::identity::{SessionId, UserId};
-use crate::message::{MessageId, Provenance};
+use crate::message::{MessageId, Provenance, Route};
 use crate::quarantine::{QuarantineKind, QuarantineStatus};
 use crate::timestamp::Timestamp;
 use crate::token::{ApiToken, Scope, ScopeSet, TokenId};
@@ -119,6 +120,14 @@ pub fn fixtures() -> Vec<(&'static str, String)> {
         ("alias-response.json", pretty(&alias_response())),
         ("alias-list-response.json", pretty(&alias_list())),
         ("alias-event.json", pretty(&alias_event())),
+        ("message-response.json", pretty(&message_response())),
+        (
+            "message-list-response.json",
+            pretty(&MessageListResponse {
+                items: vec![message_response()],
+                next_cursor: None,
+            }),
+        ),
         (
             "error-response.json",
             pretty(&ErrorResponse {
@@ -131,6 +140,7 @@ pub fn fixtures() -> Vec<(&'static str, String)> {
             "reply-request.json",
             pretty(&ReplyRequest {
                 alias_id: Some(alias_id()),
+                primary: None,
                 body: "Thanks, that works.".to_string(),
                 quoted_text: Some("> Original message".to_string()),
             }),
@@ -314,6 +324,18 @@ fn alias_event() -> AliasEventResponse {
             message_id: None,
         }),
     })
+}
+
+fn message_response() -> MessageResponse {
+    MessageResponse {
+        message_id: message_id(),
+        alias_ids: vec![alias_id()],
+        primary_received: false,
+        sender: "store@example.com".to_string(),
+        subject: "Your order".to_string(),
+        received_at: at("2026-01-04T00:00:00Z"),
+        route: Route::Inbox,
+    }
 }
 
 fn reply_context() -> ReplyContextResponse {

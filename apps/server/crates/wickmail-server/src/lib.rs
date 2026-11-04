@@ -34,9 +34,9 @@ pub use abuse::{
 pub use address::{AddressError, CanonicalAddress, Domain};
 pub use alias::{Alias, AliasId, AliasState, DEFAULT_LEASE_SECONDS};
 pub use api::{
-    API_CONTRACT_VERSION, AliasResponse, CreateAliasRequest, ExpiryRequest, ReplyContextResponse,
-    ReplyIdentityDecision, ReplyIdentityOption, ReplyIdentitySelection, ReplyRequest,
-    ReplyResponse,
+    API_CONTRACT_VERSION, AliasResponse, CreateAliasRequest, ExpiryRequest, MessageListResponse,
+    MessageResponse, ReplyContextResponse, ReplyIdentityDecision, ReplyIdentityOption,
+    ReplyIdentitySelection, ReplyRequest, ReplyResponse,
 };
 pub use audit::{
     AUDIT_RETENTION, AuditDetail, AuditEvent, AuditEventId, AuditEventKind,
