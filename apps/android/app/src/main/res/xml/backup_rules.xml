@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- App lock preferences and WebView state stay on the device. -->
+    <exclude
+        domain="sharedpref"
+        path="wickmail_app_lock.xml" />
+</full-backup-content>
