@@ -6,15 +6,17 @@
 
 use std::collections::HashMap;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use time::Duration;
 use wickmail_server::address::{CanonicalAddress, Domain};
+use wickmail_server::api::ReplyRequest;
 use wickmail_server::clock::SystemClock;
 use wickmail_server::generator::AliasGenerator;
 use wickmail_server::mail::{MailStoreAdapter, ServerConfig, Spool, serve};
 use wickmail_server::message::MessageId;
 use wickmail_server::quarantine::{DeleteReason, QuarantineManager, RetentionPolicy};
+use wickmail_server::reply::{DkimSigner, FileOutboundQueue, ReplyClient};
 use wickmail_server::service::{AliasService, CreateAlias, ExpiryChoice};
 use wickmail_server::timestamp::Timestamp;
 use wickmail_server::{PRODUCT_NAME, Store, StoreError, version};
@@ -34,6 +36,8 @@ fn main() -> ExitCode {
         "spool-stats" => run_spool_stats(&parsed),
         "mail-store" => run_mail_store(&parsed),
         "quarantine" => run_quarantine(&parsed),
+        "reply-context" => run_reply_context(&parsed),
+        "reply" => run_reply(&parsed),
         other => Err(format!("unknown command: {other}")),
     };
     match result {
@@ -85,6 +89,9 @@ fn run_serve(args: &Args) -> Result<(), String> {
         config.max_spool_entries = max
             .parse()
             .map_err(|_| "--max-spool must be an integer".to_string())?;
+    }
+    if let Some(socket) = args.get("submission-socket") {
+        config.submission_socket = Some(socket.into());
     }
     if let Some(name) = args.get("socketmap-name") {
         config.socketmap_name = name;
@@ -340,6 +347,109 @@ fn run_mail_store(args: &Args) -> Result<(), String> {
         }
         other => Err(format!("unknown mail-store subcommand: {other}")),
     }
+}
+
+fn run_reply_context(args: &Args) -> Result<(), String> {
+    let message_id = args
+        .positional
+        .first()
+        .ok_or_else(|| reply_usage("reply-context"))?;
+    let message_id: MessageId = message_id.parse().map_err(|error| format!("{error}"))?;
+    let client = build_reply_client(args)?;
+    let context = client
+        .fetch_reply_context(message_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("no reply context for message {message_id}"))?;
+    let json = serde_json::to_string_pretty(&context).map_err(|error| error.to_string())?;
+    println!("{json}");
+    Ok(())
+}
+
+fn run_reply(args: &Args) -> Result<(), String> {
+    let message_id = args
+        .positional
+        .first()
+        .ok_or_else(|| reply_usage("reply"))?;
+    let message_id: MessageId = message_id.parse().map_err(|error| format!("{error}"))?;
+    let alias_id = match args.get("alias") {
+        Some(value) => Some(
+            value
+                .parse::<wickmail_server::alias::AliasId>()
+                .map_err(|error| format!("{error}"))?,
+        ),
+        None => None,
+    };
+    let request = ReplyRequest {
+        alias_id,
+        body: args.get("body").unwrap_or_default(),
+        quoted_text: args.get("quote"),
+    };
+    let client = build_reply_client(args)?;
+    let response = client
+        .submit_reply(message_id, &request)
+        .map_err(|error| error.to_string())?;
+    let json = serde_json::to_string_pretty(&response).map_err(|error| error.to_string())?;
+    println!("{json}");
+    Ok(())
+}
+
+fn reply_usage(command: &str) -> String {
+    format!(
+        "usage: {command} <message-id> --db <path> --domain <domain> --maildir <path> \
+         --outbound-dir <path> [--primary <address>] [--dkim-key <pem>] [--dkim-selector <name>]"
+    )
+}
+
+/// Builds a reply client from CLI flags.
+fn build_reply_client(args: &Args) -> Result<ReplyClient, String> {
+    let db_path = args.required("db")?;
+    let domain = Domain::parse(&args.required("domain")?).map_err(|error| error.to_string())?;
+    let mut store = Store::open(&db_path).map_err(store_error)?;
+    store.migrate().map_err(store_error)?;
+    let service = Arc::new(Mutex::new(AliasService::new(
+        store,
+        AliasGenerator::new(),
+        domain.clone(),
+        Arc::new(SystemClock),
+    )));
+
+    let maildir = args.required("maildir")?;
+    let mail = match args.get("quarantine-dir") {
+        Some(quarantine_dir) => MailStoreAdapter::with_quarantine(maildir, quarantine_dir),
+        None => MailStoreAdapter::open(maildir),
+    };
+
+    let outbound_dir = args.required("outbound-dir")?;
+    let queue = Arc::new(FileOutboundQueue::open(outbound_dir).map_err(|error| error.to_string())?);
+
+    let dkim = match args.get("dkim-key") {
+        Some(path) => {
+            let pem = std::fs::read_to_string(&path)
+                .map_err(|error| format!("cannot read DKIM key {path}: {error}"))?;
+            let selector = args
+                .get("dkim-selector")
+                .unwrap_or_else(|| "wickmail".to_string());
+            Some(
+                DkimSigner::from_pem(domain.clone(), selector, &pem)
+                    .map_err(|error| error.to_string())?,
+            )
+        }
+        None => None,
+    };
+
+    let primary = match args.get("primary") {
+        Some(value) => Some(CanonicalAddress::parse(&value).map_err(|error| error.to_string())?),
+        None => None,
+    };
+
+    Ok(ReplyClient::new(
+        service,
+        mail,
+        queue,
+        dkim,
+        primary,
+        Arc::new(SystemClock),
+    ))
 }
 
 fn store_error(error: StoreError) -> String {

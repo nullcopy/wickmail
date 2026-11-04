@@ -26,8 +26,21 @@ export type AuditEventKind =
   | "disabled"
   | "enabled";
 
-/** Default reply identity derived from message provenance by the server. */
-export type ReplyIdentity = { alias: string } | "primary" | "ambiguous" | "none";
+/** How the default reply identity was chosen by the server. */
+export type ReplyIdentitySelection = "default" | "prompt";
+
+/** A concrete reply sending identity. */
+export type ReplyIdentityOption =
+  { kind: "alias"; aliasId: string; address: string } | { kind: "primary"; address: string };
+
+/** The reply-identity decision for a message's trusted provenance. */
+export interface ReplyIdentityDecision {
+  selection: ReplyIdentitySelection;
+  /** The default identity, or null when the client must prompt. */
+  selected: ReplyIdentityOption | null;
+  /** The identities the client may offer, in preference order. */
+  options: ReplyIdentityOption[];
+}
 
 /** An alias as returned by the management API. */
 export interface Alias {
@@ -118,21 +131,28 @@ export interface ErrorResponse {
 export interface Provenance {
   aliasIds: string[];
   primaryReceived: boolean;
-  replyIdentity: ReplyIdentity;
 }
 
 /** Response of `GET /v1/messages/{id}/reply-context`. */
 export interface ReplyContext {
   messageId: string;
-  from: string;
-  subject: string;
+  /** Sanitized sender, or null when it cannot be determined. */
+  from: string | null;
+  /** Sanitized subject, or null when absent. */
+  subject: string | null;
+  /** Sanitized plain-text body. */
   text: string;
+  /** The original RFC 5322 Message-ID, for threading, or null. */
+  originalMessageId: string | null;
   provenance: Provenance;
+  /** The reply-identity decision derived from provenance and ownership. */
+  identity: ReplyIdentityDecision;
 }
 
 /** Body of `POST /v1/messages/{id}/reply`. */
 export interface ReplyRequest {
-  aliasId: string;
+  /** Alias to send as, or null for the default identity. */
+  aliasId: string | null;
   body: string;
   quotedText: string | null;
 }
@@ -141,6 +161,12 @@ export interface ReplyRequest {
 export interface ReplyResponse {
   queued: boolean;
   messageId: string;
+  /** The identity the reply was sent as. */
+  identity: ReplyIdentityOption;
+  /** Whether the submission renewed the alias lease. */
+  renewed: boolean;
+  /** The resulting absolute expiry, or null for no expiry. */
+  expiresAt: string | null;
 }
 
 /** The management API contract version mirrored by this client. */

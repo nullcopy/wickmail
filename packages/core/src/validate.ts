@@ -21,7 +21,8 @@ import type {
   ExpiryRequest,
   Provenance,
   ReplyContext,
-  ReplyIdentity,
+  ReplyIdentityDecision,
+  ReplyIdentityOption,
   ReplyRequest,
   ReplyResponse,
   SetExpiryRequest,
@@ -204,28 +205,48 @@ const errorResponse: Parser<ErrorResponse> = object<ErrorResponse>({
   message: string,
 });
 
-const replyIdentity: Parser<ReplyIdentity> = (value, path) => {
-  if (value === "primary" || value === "ambiguous" || value === "none") return value;
-  if (isRecord(value)) return object<{ alias: string }>({ alias: string })(value, path);
-  return fail(path, "expected reply identity");
+const replyIdentityOption: Parser<ReplyIdentityOption> = (value, path) => {
+  if (!isRecord(value)) fail(path, "expected reply identity option");
+  switch (value["kind"]) {
+    case "alias":
+      return object<{ kind: "alias"; aliasId: string; address: string }>({
+        kind: oneOf("alias"),
+        aliasId: string,
+        address: string,
+      })(value, path);
+    case "primary":
+      return object<{ kind: "primary"; address: string }>({
+        kind: oneOf("primary"),
+        address: string,
+      })(value, path);
+    default:
+      return fail(`${path}.kind`, "expected alias or primary");
+  }
 };
+
+const replyIdentityDecision: Parser<ReplyIdentityDecision> = object<ReplyIdentityDecision>({
+  selection: oneOf("default", "prompt"),
+  selected: nullable(replyIdentityOption),
+  options: arrayOf(replyIdentityOption),
+});
 
 const provenance: Parser<Provenance> = object<Provenance>({
   aliasIds: arrayOf(string),
   primaryReceived: boolean,
-  replyIdentity,
 });
 
 const replyContext: Parser<ReplyContext> = object<ReplyContext>({
   messageId: string,
-  from: string,
-  subject: string,
+  from: nullable(string),
+  subject: nullable(string),
   text: string,
+  originalMessageId: nullable(string),
   provenance,
+  identity: replyIdentityDecision,
 });
 
 const replyRequest: Parser<ReplyRequest> = object<ReplyRequest>({
-  aliasId: string,
+  aliasId: nullable(string),
   body: string,
   quotedText: nullable(string),
 });
@@ -233,6 +254,9 @@ const replyRequest: Parser<ReplyRequest> = object<ReplyRequest>({
 const replyResponse: Parser<ReplyResponse> = object<ReplyResponse>({
   queued: boolean,
   messageId: string,
+  identity: replyIdentityOption,
+  renewed: boolean,
+  expiresAt: nullable(string),
 });
 
 const contractVersion: Parser<ContractVersion> = object<ContractVersion>({

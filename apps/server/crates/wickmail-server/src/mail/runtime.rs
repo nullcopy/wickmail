@@ -25,6 +25,7 @@ use crate::mail::policy::RecipientPolicy;
 use crate::mail::socketmap::{self, DEFAULT_SOCKETMAP_NAME};
 use crate::mail::spool::{Spool, SpoolError, SpoolMeta};
 use crate::mail::store::MailStoreAdapter;
+use crate::mail::submission::{SUBMISSION_SOCKETMAP_NAME, SubmissionPolicy};
 use crate::message::{Message, Route};
 use crate::quarantine::{QuarantineError, QuarantineManager, RetentionPolicy};
 use crate::service::AliasService;
@@ -40,6 +41,8 @@ pub struct ServerConfig {
     pub primary: CanonicalAddress,
     /// Unix socket Postfix uses for the RCPT policy lookup.
     pub policy_socket: PathBuf,
+    /// Unix socket Postfix uses for the outbound submission ownership check.
+    pub submission_socket: Option<PathBuf>,
     /// Unix socket the LMTP proxy listens on.
     pub lmtp_socket: PathBuf,
     /// Where the proxy forwards accepted mail.
@@ -78,6 +81,7 @@ impl ServerConfig {
             domain,
             primary,
             policy_socket: policy_socket.into(),
+            submission_socket: None,
             lmtp_socket: lmtp_socket.into(),
             dovecot_lmtp,
             spool_dir: spool_dir.into(),
@@ -366,6 +370,26 @@ pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
         config.dovecot_lmtp.clone(),
         config.hostname.clone(),
     ));
+    if let Some(submission_socket) = &config.submission_socket {
+        let submission = Arc::new(SubmissionPolicy::new(
+            config.primary.clone(),
+            service.clone(),
+        ));
+        let listener = socketmap::bind(submission_socket)?;
+        let name = SUBMISSION_SOCKETMAP_NAME.to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let submission = submission.clone();
+                let name = name.clone();
+                std::thread::spawn(move || {
+                    let _ = socketmap::serve_connection_with(stream, |payload| {
+                        submission.reply_for(&name, payload)
+                    });
+                });
+            }
+        });
+    }
+
     let mut path = MailPath::new(
         policy.clone(),
         spool.clone(),

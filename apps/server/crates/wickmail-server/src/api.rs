@@ -11,11 +11,11 @@ use crate::address::CanonicalAddress;
 use crate::alias::{Alias, AliasId, AliasState};
 use crate::audit::{AuditDetail, AuditEvent, AuditEventId, AuditEventKind};
 use crate::lease::evaluate_state;
-use crate::message::{MessageId, Provenance, ReplyIdentity};
+use crate::message::{MessageId, Provenance};
 use crate::timestamp::Timestamp;
 
 /// Version of the management API contract.
-pub const API_CONTRACT_VERSION: &str = "1.0.0";
+pub const API_CONTRACT_VERSION: &str = "1.1.0";
 
 /// Body of `POST /v1/aliases`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,19 +196,79 @@ pub struct ProvenanceResponse {
     pub alias_ids: Vec<AliasId>,
     /// Whether the primary address received the message.
     pub primary_received: bool,
-    /// Default reply identity for this provenance.
-    pub reply_identity: ReplyIdentity,
 }
 
 impl From<Provenance> for ProvenanceResponse {
     fn from(provenance: Provenance) -> Self {
-        let reply_identity = provenance.reply_identity();
         Self {
             alias_ids: provenance.alias_ids,
             primary_received: provenance.primary_received,
-            reply_identity,
         }
     }
+}
+
+/// How the default reply identity was chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplyIdentitySelection {
+    /// The server selected a default identity.
+    Default,
+    /// Several aliases received the message; the client must prompt.
+    Prompt,
+}
+
+/// A concrete reply sending identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ReplyIdentityOption {
+    /// An owned alias that received the message.
+    Alias {
+        /// The alias identity.
+        alias_id: AliasId,
+        /// The alias's canonical address.
+        address: CanonicalAddress,
+    },
+    /// The account's primary address.
+    Primary {
+        /// The primary canonical address.
+        address: CanonicalAddress,
+    },
+}
+
+impl ReplyIdentityOption {
+    /// The sending address for this identity.
+    pub fn address(&self) -> &CanonicalAddress {
+        match self {
+            Self::Alias { address, .. } | Self::Primary { address } => address,
+        }
+    }
+
+    /// The alias identity, when this option is an alias.
+    pub fn alias_id(&self) -> Option<AliasId> {
+        match self {
+            Self::Alias { alias_id, .. } => Some(*alias_id),
+            Self::Primary { .. } => None,
+        }
+    }
+}
+
+/// The reply-identity decision for a message's trusted provenance.
+///
+/// `selected` is the default identity, or `None` when the client must prompt.
+/// `options` are the identities the client may offer, in preference order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyIdentityDecision {
+    /// Whether a default was selected or the client must prompt.
+    pub selection: ReplyIdentitySelection,
+    /// The default identity, or `None` when the client must prompt.
+    pub selected: Option<ReplyIdentityOption>,
+    /// The identities the client may offer, in preference order.
+    pub options: Vec<ReplyIdentityOption>,
 }
 
 /// Response of `GET /v1/messages/{id}/reply-context`.
@@ -217,22 +277,29 @@ impl From<Provenance> for ProvenanceResponse {
 pub struct ReplyContextResponse {
     /// Stable message identity.
     pub message_id: MessageId,
-    /// Sanitized sender.
-    pub from: String,
-    /// Subject line.
-    pub subject: String,
-    /// Plain-text body for quoting.
+    /// Sanitized sender, or `None` when it cannot be determined.
+    pub from: Option<String>,
+    /// Sanitized subject, or `None` when absent.
+    pub subject: Option<String>,
+    /// Sanitized plain-text body for quoting.
     pub text: String,
+    /// The original RFC 5322 `Message-ID`, for threading, or `None`.
+    pub original_message_id: Option<String>,
     /// Trusted provenance.
     pub provenance: ProvenanceResponse,
+    /// The reply-identity decision derived from provenance and ownership.
+    pub identity: ReplyIdentityDecision,
 }
 
 /// Body of `POST /v1/messages/{id}/reply`.
+///
+/// `alias_id` selects an owned alias that received the message; omitting it
+/// uses the default identity from provenance.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyRequest {
-    /// Alias to send as.
-    pub alias_id: AliasId,
+    /// Alias to send as, or `None` for the default identity.
+    pub alias_id: Option<AliasId>,
     /// Message body.
     pub body: String,
     /// Optional quoted text.
@@ -240,13 +307,19 @@ pub struct ReplyRequest {
 }
 
 /// Response of `POST /v1/messages/{id}/reply`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyResponse {
     /// Whether the message was queued for submission.
     pub queued: bool,
     /// Identity assigned to the queued message.
     pub message_id: MessageId,
+    /// The identity the reply was sent as.
+    pub identity: ReplyIdentityOption,
+    /// Whether the submission renewed the alias lease.
+    pub renewed: bool,
+    /// The resulting absolute expiry, or `None` for no expiry.
+    pub expires_at: Option<Timestamp>,
 }
 
 /// Error envelope returned for failed requests.

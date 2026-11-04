@@ -58,6 +58,22 @@ let
                 pass
 
 
+    def submission(sender):
+        client = smtplib.SMTP(SERVER, 587, timeout=30)
+        try:
+            client.ehlo(DOMAIN)
+            code, text = client.mail(sender)
+            if code >= 400:
+                return code, text
+            # Sender restrictions are evaluated at RCPT TO.
+            return client.rcpt("recipient@example.net")
+        finally:
+            try:
+                client.quit()
+            except Exception:
+                pass
+
+
     def imap():
         client = imaplib.IMAP4(SERVER, 143)
         client.login(PRIMARY, PASSWORD)
@@ -120,10 +136,24 @@ let
     active = create_alias("green.farm", "--lease", "86400")
     expired = create_alias("old.farm", "--expires-at", "2020-01-01T00:00:00Z")
     disabled = create_alias("off.farm", "--lease", "86400", "--disable")
+    stale = create_alias(
+        "stale.farm", "--expires-at", "2020-01-01T00:00:00Z", "--renew-on-outbound", "false"
+    )
     active_addr = active["address"]
     expired_addr = expired["address"]
     disabled_addr = disabled["address"]
+    stale_addr = stale["address"]
     print(f"active={active_addr} expired={expired_addr} disabled={disabled_addr}", flush=True)
+
+    step("authenticated submission routes through the ownership check")
+    code, text = submission(PRIMARY)
+    assert code == 250, f"primary sender rejected: {code} {text}"
+    code, text = submission(active_addr)
+    assert code == 250, f"owned alias sender rejected: {code} {text}"
+    code, text = submission("nobody@" + DOMAIN)
+    assert code == 550, f"unknown sender accepted: {code} {text}"
+    code, text = submission(stale_addr)
+    assert code == 550, f"expired non-renewing sender accepted: {code} {text}"
 
     step("unknown and disabled recipients are rejected at RCPT")
     code, text, _ = smtp("nobody@" + DOMAIN, "Subject: x\r\n\r\nbody\r\n")
@@ -254,6 +284,16 @@ pkgs.testers.nixosTest {
       domain = "wickmail.test";
       primaryAddress = "user@wickmail.test";
       mailPassword = "secret";
+      enableSubmission = true;
+    };
+    # The VM test exercises the ownership check without TLS or SASL so it stays
+    # hermetic; a real deployment authenticates submission with Dovecot SASL.
+    services.postfix.submissionOptions = pkgs.lib.mkForce {
+      smtpd_tls_security_level = "none";
+      smtpd_recipient_restrictions = "permit";
+      smtpd_sender_restrictions = "wickmail_sender";
+      access_map_reject_code = "550";
+      milter_macro_daemon_name = "ORIGINATING";
     };
     environment.systemPackages = [
       pkgs.python3

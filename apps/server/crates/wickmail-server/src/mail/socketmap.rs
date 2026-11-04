@@ -37,11 +37,22 @@ pub fn serve_connection(
     name: &str,
     policy: &RecipientPolicy,
 ) -> io::Result<()> {
+    serve_connection_with(stream, |payload| reply_for(name, payload, policy))
+}
+
+/// Serves one socketmap connection with a caller-supplied reply function.
+///
+/// The function receives each netstring payload and returns the reply string.
+/// This lets the submission ownership check reuse the netstring framing.
+pub fn serve_connection_with<F>(stream: UnixStream, reply: F) -> io::Result<()>
+where
+    F: Fn(&[u8]) -> String,
+{
     let mut reader = stream.try_clone()?;
     let mut writer = stream;
     while let Some(payload) = read_netstring(&mut reader)? {
-        let reply = reply_for(name, &payload, policy);
-        write_netstring(&mut writer, reply.as_bytes())?;
+        let response = reply(&payload);
+        write_netstring(&mut writer, response.as_bytes())?;
     }
     Ok(())
 }

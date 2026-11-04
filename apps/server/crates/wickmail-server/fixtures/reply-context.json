@@ -3,13 +3,30 @@
   "from": "store@example.com",
   "subject": "Your order",
   "text": "Your order shipped.",
+  "originalMessageId": "<orig@example.com>",
   "provenance": {
     "aliasIds": [
       "018f9b60-0000-7000-8000-000000000001"
     ],
-    "primaryReceived": true,
-    "replyIdentity": {
-      "alias": "018f9b60-0000-7000-8000-000000000001"
-    }
+    "primaryReceived": true
+  },
+  "identity": {
+    "selection": "default",
+    "selected": {
+      "kind": "alias",
+      "aliasId": "018f9b60-0000-7000-8000-000000000001",
+      "address": "green.farm@example.com"
+    },
+    "options": [
+      {
+        "kind": "alias",
+        "aliasId": "018f9b60-0000-7000-8000-000000000001",
+        "address": "green.farm@example.com"
+      },
+      {
+        "kind": "primary",
+        "address": "user@example.com"
+      }
+    ]
   }
 }

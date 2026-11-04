@@ -69,13 +69,23 @@ impl Headers {
     /// Returns the removed fields so callers can observe what was stripped.
     pub fn strip_prefix(&mut self, prefix: &str) -> Vec<Header> {
         let prefix = prefix.to_ascii_lowercase();
+        self.retain(|header| !header.name.to_ascii_lowercase().starts_with(&prefix))
+    }
+
+    /// Keeps only the fields matching `keep`, returning the removed fields.
+    ///
+    /// The relative order of the kept fields is preserved.
+    pub fn retain<F>(&mut self, mut keep: F) -> Vec<Header>
+    where
+        F: FnMut(&Header) -> bool,
+    {
         let mut removed = Vec::new();
         let mut kept = Vec::with_capacity(self.entries.len());
         for header in self.entries.drain(..) {
-            if header.name.to_ascii_lowercase().starts_with(&prefix) {
-                removed.push(header);
-            } else {
+            if keep(&header) {
                 kept.push(header);
+            } else {
+                removed.push(header);
             }
         }
         self.entries = kept;
@@ -209,6 +219,13 @@ fn parse_headers(block: &[u8]) -> Headers {
 
 /// Extracts bare email addresses from a header value such as
 /// `"Example Store" <orders@example.com>, second@example.com`.
+///
+/// Unparseable tokens are ignored. Addresses are canonicalized, so callers can
+/// compare them against an owned identity.
+pub fn mailbox_addresses(value: &str) -> Vec<CanonicalAddress> {
+    extract_addresses(value)
+}
+
 fn extract_addresses(value: &str) -> Vec<CanonicalAddress> {
     let mut addresses = Vec::new();
     for token in value.split(',') {
