@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { MessageLocator } from "wickmail-core";
 import {
@@ -181,5 +189,38 @@ export class FileMailStore implements MailStoreAdapter {
       }
     }
     return messages;
+  }
+
+  async getMessageIn(mailbox: string, messageId: string): Promise<StoredMessage | undefined> {
+    const index = this.index(mailbox);
+    const uid = index.messages[messageId];
+    if (uid === undefined) {
+      return undefined;
+    }
+    return this.readMessage(mailbox, messageId, { mailbox, uidValidity: this.uidValidity, uid });
+  }
+
+  async copyMessage(messageId: string, toMailbox: string): Promise<MessageLocator | undefined> {
+    const existing = await this.getMessageIn(toMailbox, messageId);
+    if (existing !== undefined) {
+      return existing.locator;
+    }
+    const source = await this.getMessage(messageId);
+    if (source === undefined) {
+      return undefined;
+    }
+    return this.put(toMailbox, messageId, source.raw, source.receivedAt);
+  }
+
+  async deleteMessage(mailbox: string, messageId: string): Promise<void> {
+    const directory = this.mailboxDirectory(mailbox);
+    rmSync(join(directory, `${messageId}.eml`), { force: true });
+    rmSync(join(directory, `${messageId}.json`), { force: true });
+    const index = this.index(mailbox);
+    if (index.messages[messageId] !== undefined) {
+      delete index.messages[messageId];
+      this.saveIndex(mailbox, index);
+    }
+    this.logger.debug("mail store delete", { mailbox, messageId });
   }
 }
