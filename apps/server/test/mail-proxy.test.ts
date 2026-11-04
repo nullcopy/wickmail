@@ -6,7 +6,7 @@ import type { SqliteDatabase } from "../src/db/database.js";
 import { MailProxy } from "../src/lmtp/proxy.js";
 import { getProvenance } from "../src/provenance/repository.js";
 import { FileSpool } from "../src/spool/file-spool.js";
-import { SpoolFullError, type Spool } from "../src/spool/types.js";
+import { SpoolFullError, SpoolUnavailableError, type Spool } from "../src/spool/types.js";
 import { createTempDirectory, removeTempDirectory, DAY_MS, NOW, TEST_DOMAIN } from "./helpers.js";
 import { createTestAlias } from "./mail-helpers.js";
 
@@ -207,6 +207,50 @@ describe("MailProxy", () => {
       receivedAt: NOW,
     });
     expect(result.status).toBe("tempfail");
+  });
+
+  it("returns a temporary failure when the alias database is unavailable at delivery", async () => {
+    const spool = fileSpool();
+    const brokenDb = {
+      prepare: () => {
+        throw new Error("database is locked");
+      },
+    } as unknown as SqliteDatabase;
+    const mailProxy = new MailProxy({
+      db: brokenDb,
+      spool,
+      localDomains: [TEST_DOMAIN],
+      primaryAddresses: ["me@example.com"],
+    });
+
+    const result = await mailProxy.deliver({
+      mailFrom: "sender@example.net",
+      rcptTo: ["green.farm@example.com"],
+      data: "From: a@b.example\r\n\r\nbody",
+      receivedAt: NOW,
+    });
+
+    // An internal error is a temporary failure; the message is not bounced and
+    // nothing is spooled or acknowledged.
+    expect(result).toEqual({
+      status: "tempfail",
+      reason: expect.stringContaining("recipient lookup failed"),
+    });
+    expect(await spool.list()).toHaveLength(0);
+  });
+
+  it("returns a temporary failure when the spool is unavailable before acceptance", async () => {
+    const mailProxy = proxy(
+      new FailingSpool(new SpoolUnavailableError("spool directory is missing")),
+    );
+    createTestAlias(db, { address: "green.farm@example.com", expiresAt: null });
+    const result = await mailProxy.deliver({
+      mailFrom: "sender@example.net",
+      rcptTo: ["green.farm@example.com"],
+      data: "From: a@b.example\r\n\r\nbody",
+      receivedAt: NOW,
+    });
+    expect(result).toEqual({ status: "tempfail", reason: expect.stringContaining("spool") });
   });
 });
 

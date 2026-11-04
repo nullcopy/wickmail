@@ -435,3 +435,5 @@ Failure-injection tests must cover:
 - Outbound replies use the alias as envelope sender and sole `From`, and are DKIM-aligned.
 - Recovering a quarantined message does not duplicate it.
 - No accepted message is permanently rejected or bounced for alias policy.
+
+See the [acceptance test map](mail-server-acceptance.md) for the test that verifies each criterion.

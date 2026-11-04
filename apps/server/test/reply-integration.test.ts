@@ -183,6 +183,38 @@ describe("reply path integration", () => {
     expect(getHeader(queued[0]!.raw, "From")).toBe("blue.sky@example.com");
   });
 
+  it("defaults to the alias and offers the primary when both received the message", async () => {
+    const harness = startHarness();
+    const alias = createTestAlias(harness.db, {
+      address: "green.farm@example.com",
+      expiresAt: NOW + DAY_MS,
+    });
+
+    const messageId = await ingest(
+      harness,
+      ["green.farm@example.com", PRIMARY],
+      "From: sender@example.net\r\nSubject: Both\r\n\r\nbody",
+    );
+
+    const context = await harness.client.fetchReplyContext(messageId);
+    expect(context!.provenance.primaryReceived).toBe(true);
+    expect(context!.identity.selection).toBe("default");
+    expect(context!.identity.selected).toEqual({
+      kind: "alias",
+      aliasId: alias.id,
+      address: alias.address,
+    });
+    expect(context!.identity.options).toEqual([
+      { kind: "alias", aliasId: alias.id, address: alias.address },
+      { kind: "primary", address: PRIMARY },
+    ]);
+
+    const result = await harness.client.submitReply(messageId, { body: "hi" });
+    expect(result).toMatchObject({ status: "queued" });
+    const queued = await harness.queue.list();
+    expect(getHeader(queued[0]!.raw, "From")).toBe(alias.address);
+  });
+
   it("drives context fetch and reply submission through the CLI", async () => {
     const harness = startHarness();
     const alias = createTestAlias(harness.db, {

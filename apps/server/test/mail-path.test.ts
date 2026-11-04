@@ -11,7 +11,7 @@ import {
 } from "../src/delivery/target.js";
 import { MailPath } from "../src/mail-path.js";
 import { SpoolWorker } from "../src/spool/worker.js";
-import type { Spool } from "../src/spool/types.js";
+import { SpoolFullError, SpoolUnavailableError, type Spool } from "../src/spool/types.js";
 import { createTempDirectory, removeTempDirectory, DAY_MS, NOW, TEST_DOMAIN } from "./helpers.js";
 import { createTestAlias } from "./mail-helpers.js";
 import { TestLineClient } from "./support.js";
@@ -38,7 +38,10 @@ afterEach(async () => {
   }
 });
 
-async function startHarness(overrideTarget?: DeliveryTarget): Promise<Harness> {
+async function startHarness(
+  overrideTarget?: DeliveryTarget,
+  overrideSpool?: Spool,
+): Promise<Harness> {
   const directory = createTempDirectory();
   tempDirectories.push(directory);
   const db = openDatabase({ path: join(directory, "wickmail.db") });
@@ -55,6 +58,7 @@ async function startHarness(overrideTarget?: DeliveryTarget): Promise<Harness> {
     },
     target,
     now: () => NOW,
+    ...(overrideSpool !== undefined ? { spool: overrideSpool } : {}),
   });
   const policyAddress = (await mailPath.listenPolicy({ port: 0 })) as AddressInfo;
   const lmtpAddress = (await mailPath.listenLmtp({ port: 0 })) as AddressInfo;
@@ -248,4 +252,83 @@ describe("inbound mail path harness", () => {
     expect(recovered.delivered).toHaveLength(1);
     expect(await harness.spool.list()).toHaveLength(0);
   });
+
+  it("defers at LMTP, before acceptance, when the spool is unavailable", async () => {
+    const harness = await startHarness(
+      undefined,
+      new FailingSpool(new SpoolUnavailableError("spool directory is missing")),
+    );
+    createTestAlias(harness.db, { address: "green.farm@example.com", expiresAt: null });
+
+    const { dataReply } = await lmtpDeliver(harness.lmtpPort, {
+      mailFrom: "sender@example.net",
+      rcptTo: "green.farm@example.com",
+      data: "From: sender@example.net\r\n\r\nbody",
+    });
+
+    // A spool failure is a 4xx defer, never a 5xx permanent rejection.
+    expect(TestLineClient.status(dataReply)).toBe(451);
+    expect(dataReply.join(" ")).toContain("spool");
+  });
+
+  it("defers at LMTP, before acceptance, when the spool is full", async () => {
+    const harness = await startHarness(
+      undefined,
+      new FailingSpool(new SpoolFullError("spool filesystem is full")),
+    );
+    createTestAlias(harness.db, { address: "green.farm@example.com", expiresAt: null });
+
+    const { dataReply } = await lmtpDeliver(harness.lmtpPort, {
+      mailFrom: "sender@example.net",
+      rcptTo: "green.farm@example.com",
+      data: "From: sender@example.net\r\n\r\nbody",
+    });
+
+    // Spool exhaustion is reported as an alertable full-spool error and a 4xx
+    // defer, so the MTA retries instead of bouncing the message.
+    expect(TestLineClient.status(dataReply)).toBe(451);
+    expect(dataReply.join(" ")).toContain("spool");
+  });
+
+  it("does not renew an alias from a spoofed inbound MAIL FROM", async () => {
+    const harness = await startHarness();
+    const expiresAt = NOW + DAY_MS;
+    const alias = createTestAlias(harness.db, {
+      address: "green.farm@example.com",
+      expiresAt,
+      leaseDurationSeconds: 3600,
+      renewOnOutbound: true,
+    });
+
+    // The envelope sender forges the alias's own address. Inbound mail cannot
+    // extend its own delivery window, so the lease is untouched.
+    const { dataReply } = await lmtpDeliver(harness.lmtpPort, {
+      mailFrom: "green.farm@example.com",
+      rcptTo: "green.farm@example.com",
+      data: "From: green.farm@example.com\r\n\r\nbody",
+    });
+    expect(TestLineClient.status(dataReply)).toBe(250);
+
+    const stored = getAliasById(harness.db, alias.id)!;
+    expect(stored.expiresAt).toBe(expiresAt);
+    expect(stored.lastInboundAt).toBe(NOW);
+  });
 });
+
+class FailingSpool implements Spool {
+  constructor(private readonly error: Error) {}
+  async enqueue(): Promise<void> {
+    throw this.error;
+  }
+  async list() {
+    return [];
+  }
+  async get() {
+    return undefined;
+  }
+  async remove(): Promise<void> {}
+  async recordAttempt(): Promise<void> {}
+  async stats() {
+    return { depth: 0, oldestAgeMs: null };
+  }
+}
