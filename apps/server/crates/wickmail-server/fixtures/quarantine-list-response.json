@@ -1,0 +1,24 @@
+{
+  "items": [
+    {
+      "messageId": "018f9b60-0000-7000-8000-0000000000aa",
+      "kind": "lease",
+      "status": "quarantined",
+      "aliasIds": [
+        "018f9b60-0000-7000-8000-000000000001"
+      ],
+      "sender": "store@example.com",
+      "subject": "Your order",
+      "receivedAt": "2026-01-04T00:00:00Z",
+      "quarantineExpiresAt": "2026-02-03T00:00:00Z",
+      "sizeBytes": 1024,
+      "deleteReason": null,
+      "createdAt": "2026-01-04T00:00:00Z",
+      "updatedAt": "2026-01-04T00:00:00Z",
+      "recoveredAt": null,
+      "deletedAt": null,
+      "preview": "Your order shipped."
+    }
+  ],
+  "nextCursor": null
+}

@@ -1,0 +1,8 @@
+{
+  "name": "ci",
+  "scopes": [
+    "aliases:read",
+    "messages:reply"
+  ],
+  "expiresAt": "2027-01-01T00:00:00Z"
+}

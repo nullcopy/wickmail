@@ -53,13 +53,44 @@ The binary runs the mail path and provides administrative commands:
 ```text
 wickmail-server serve --db <db> --domain <domain> --primary <address> \
   --policy-socket <path> --lmtp-socket <path> --dovecot-lmtp <spec> \
-  --spool-dir <dir>
+  --spool-dir <dir> [--http-listen <host:port> --web-root <dir> \
+  --outbound-dir <dir>]
 wickmail-server migrate <database>
+wickmail-server bootstrap --db <db> --primary <address> [--username <name>]
+wickmail-server set-password --db <db> --setup-token <token> \
+  (--password <password> | --password-stdin)
+wickmail-server reset-password --db <db> (--password <password> | --password-stdin)
+wickmail-server recovery-codes --db <db>
+wickmail-server mail-credential show|rotate|revoke --db <db>
 wickmail-server create-alias --db <db> --domain <domain> [--local-part <name>] \
   [--lease <seconds> | --expires-at <rfc3339> | --never] [--disable]
 wickmail-server spool-stats --dir <spool>
 wickmail-server mail-store list|quarantine|read --maildir <dir> [--quarantine-dir <dir>]
 ```
+
+## Management API and authentication (M6)
+
+The management API is JSON over HTTP, served by the same process as the mail
+path:
+
+- `identity`: the single user, Argon2id passwords, revocable server-side
+  sessions, one-time recovery codes, passkey records, and the separate Dovecot
+  mail credential.
+- `token`: hashed, scoped, expirable, revocable API tokens.
+- `abuse`: maximum message size, per-alias and global quarantine quotas,
+  per-sender and global rate limits, disk-full detection, and alerts.
+- `http`: the `/v1` axum router, cookie and bearer authentication, per-endpoint
+  scopes, CSRF for cookie mutations, idempotent retries, and same-origin static
+  asset serving.
+
+First run is bootstrapped locally with `bootstrap`, which creates the user and
+prints a single-use setup token. There are no default credentials. Account
+recovery is local through `reset-password` or one-time recovery codes, never
+through email.
+
+`serve --http-listen` also starts the management API and serves the built web
+app from the same origin. Run the management API tests with
+`nix develop -c cargo test -p wickmail-server --test management_api`.
 
 Run the tests with `nix develop -c cargo test -p wickmail-server`. The NixOS VM
 test under `nix/tests/mail-path.nix` runs the full mail path with Postfix,

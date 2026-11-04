@@ -173,3 +173,131 @@ export interface ReplyResponse {
 export interface ContractVersion {
   apiContractVersion: string;
 }
+
+/** A capability an API token may be granted. */
+export type Scope =
+  | "aliases:read"
+  | "aliases:write"
+  | "quarantine:read"
+  | "quarantine:write"
+  | "messages:read"
+  | "messages:reply";
+
+/** Body of `POST /v1/setup`. */
+export interface SetupRequest {
+  setupToken: string;
+  password: string;
+}
+
+/** The management user as returned by the API. */
+export interface UserResponse {
+  id: string;
+  username: string;
+  primaryAddress: string;
+  createdAt: string;
+  setupCompleted: boolean;
+  passwordChangedAt: string | null;
+}
+
+/** A management session. */
+export interface SessionInfo {
+  id: string;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+}
+
+/** Response of `POST /v1/sessions` and `GET /v1/session`. */
+export interface SessionResponse {
+  session: SessionInfo;
+  csrfToken: string;
+}
+
+/** Body of `POST /v1/tokens`. */
+export interface CreateTokenRequest {
+  name: string;
+  scopes: Scope[];
+  expiresAt: string | null;
+}
+
+/** An API token as returned by the API. The secret is never included. */
+export interface ApiToken {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: Scope[];
+  createdAt: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+}
+
+/** Response of `POST /v1/tokens`. The token is shown exactly once. */
+export interface IssuedTokenResponse {
+  token: string;
+  record: ApiToken;
+}
+
+/** Response of `GET /v1/tokens`. */
+export interface TokenListResponse {
+  items: ApiToken[];
+}
+
+/** Lease quarantine or spam. */
+export type QuarantineKind = "lease" | "spam";
+
+/** Lifecycle status of a quarantined message. */
+export type QuarantineStatus = "quarantined" | "recovering" | "recovered" | "deleting" | "deleted";
+
+/** A quarantined message as returned by the API. */
+export interface QuarantineResponse {
+  messageId: string;
+  kind: QuarantineKind;
+  status: QuarantineStatus;
+  aliasIds: string[];
+  sender: string;
+  subject: string;
+  receivedAt: string;
+  quarantineExpiresAt: string;
+  sizeBytes: number;
+  deleteReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  recoveredAt: string | null;
+  deletedAt: string | null;
+  preview: string | null;
+}
+
+/** Response of `GET /v1/quarantine`. */
+export interface QuarantineListResponse {
+  items: QuarantineResponse[];
+  nextCursor: string | null;
+}
+
+/** Body of `POST /v1/quarantine/{id}/recover`. */
+export interface RecoverQuarantineRequest {
+  renew: boolean | null;
+  enable: boolean | null;
+}
+
+/** The mail credential as returned by the API. */
+export interface MailCredentialResponse {
+  configured: boolean;
+  createdAt: string | null;
+  rotatedAt: string | null;
+  revokedAt: string | null;
+}
+
+/** Response of `POST /v1/mail-credential`. The password is shown once. */
+export interface RotateMailCredentialResponse {
+  credential: MailCredentialResponse;
+  password: string;
+}
+
+/** A registered passkey as returned by the API. */
+export interface PasskeyResponse {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}

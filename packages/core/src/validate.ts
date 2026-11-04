@@ -11,22 +11,37 @@ import type {
   AliasEvent,
   AliasListResponse,
   AliasState,
+  ApiToken,
   AuditDetail,
   AuditEventKind,
   ContractVersion,
   CreateAliasRequest,
+  CreateTokenRequest,
   DurationRequest,
   EnableRequest,
   ErrorResponse,
   ExpiryRequest,
+  IssuedTokenResponse,
+  MailCredentialResponse,
+  PasskeyResponse,
   Provenance,
+  QuarantineListResponse,
+  QuarantineResponse,
+  RecoverQuarantineRequest,
   ReplyContext,
   ReplyIdentityDecision,
   ReplyIdentityOption,
   ReplyRequest,
   ReplyResponse,
+  RotateMailCredentialResponse,
+  Scope,
+  SessionInfo,
+  SessionResponse,
   SetExpiryRequest,
+  SetupRequest,
+  TokenListResponse,
   UpdateAliasRequest,
+  UserResponse,
 } from "./contract.ts";
 
 /** Raised when a payload does not match the client schema. */
@@ -263,6 +278,127 @@ const contractVersion: Parser<ContractVersion> = object<ContractVersion>({
   apiContractVersion: string,
 });
 
+const scope: Parser<Scope> = oneOf(
+  "aliases:read",
+  "aliases:write",
+  "quarantine:read",
+  "quarantine:write",
+  "messages:read",
+  "messages:reply",
+);
+
+const setupRequest: Parser<SetupRequest> = object<SetupRequest>({
+  setupToken: string,
+  password: string,
+});
+
+const userResponse: Parser<UserResponse> = object<UserResponse>({
+  id: string,
+  username: string,
+  primaryAddress: string,
+  createdAt: string,
+  setupCompleted: boolean,
+  passwordChangedAt: nullable(string),
+});
+
+const sessionInfo: Parser<SessionInfo> = object<SessionInfo>({
+  id: string,
+  createdAt: string,
+  lastUsedAt: string,
+  expiresAt: string,
+});
+
+const sessionResponse: Parser<SessionResponse> = object<SessionResponse>({
+  session: sessionInfo,
+  csrfToken: string,
+});
+
+const createTokenRequest: Parser<CreateTokenRequest> = object<CreateTokenRequest>({
+  name: string,
+  scopes: arrayOf(scope),
+  expiresAt: nullable(string),
+});
+
+const apiToken: Parser<ApiToken> = object<ApiToken>({
+  id: string,
+  name: string,
+  prefix: string,
+  scopes: arrayOf(scope),
+  createdAt: string,
+  expiresAt: nullable(string),
+  revokedAt: nullable(string),
+  lastUsedAt: nullable(string),
+});
+
+const issuedTokenResponse: Parser<IssuedTokenResponse> = object<IssuedTokenResponse>({
+  token: string,
+  record: apiToken,
+});
+
+const tokenListResponse: Parser<TokenListResponse> = object<TokenListResponse>({
+  items: arrayOf(apiToken),
+});
+
+const quarantineKind: Parser<QuarantineResponse["kind"]> = oneOf("lease", "spam");
+
+const quarantineStatus: Parser<QuarantineResponse["status"]> = oneOf(
+  "quarantined",
+  "recovering",
+  "recovered",
+  "deleting",
+  "deleted",
+);
+
+const quarantineResponse: Parser<QuarantineResponse> = object<QuarantineResponse>({
+  messageId: string,
+  kind: quarantineKind,
+  status: quarantineStatus,
+  aliasIds: arrayOf(string),
+  sender: string,
+  subject: string,
+  receivedAt: string,
+  quarantineExpiresAt: string,
+  sizeBytes: number,
+  deleteReason: nullable(string),
+  createdAt: string,
+  updatedAt: string,
+  recoveredAt: nullable(string),
+  deletedAt: nullable(string),
+  preview: nullable(string),
+});
+
+const quarantineListResponse: Parser<QuarantineListResponse> = object<QuarantineListResponse>({
+  items: arrayOf(quarantineResponse),
+  nextCursor: nullable(string),
+});
+
+const recoverQuarantineRequest: Parser<RecoverQuarantineRequest> = object<RecoverQuarantineRequest>(
+  {
+    renew: nullable(boolean),
+    enable: nullable(boolean),
+  },
+);
+
+const mailCredentialResponse: Parser<MailCredentialResponse> = object<MailCredentialResponse>({
+  configured: boolean,
+  createdAt: nullable(string),
+  rotatedAt: nullable(string),
+  revokedAt: nullable(string),
+});
+
+const rotateMailCredentialResponse: Parser<RotateMailCredentialResponse> =
+  object<RotateMailCredentialResponse>({
+    credential: mailCredentialResponse,
+    password: string,
+  });
+
+const passkeyResponse: Parser<PasskeyResponse> = object<PasskeyResponse>({
+  id: string,
+  name: string,
+  createdAt: string,
+  lastUsedAt: nullable(string),
+});
+
 /** Validates an alias payload. */
 export function parseAlias(value: unknown, path = "$"): Alias {
   return alias(value, path);
@@ -326,4 +462,70 @@ export function parseReplyResponse(value: unknown, path = "$"): ReplyResponse {
 /** Validates the contract-version payload. */
 export function parseContractVersion(value: unknown, path = "$"): ContractVersion {
   return contractVersion(value, path);
+}
+
+/** Validates a setup request payload. */
+export function parseSetupRequest(value: unknown, path = "$"): SetupRequest {
+  return setupRequest(value, path);
+}
+
+/** Validates a user payload. */
+export function parseUserResponse(value: unknown, path = "$"): UserResponse {
+  return userResponse(value, path);
+}
+
+/** Validates a session payload. */
+export function parseSessionResponse(value: unknown, path = "$"): SessionResponse {
+  return sessionResponse(value, path);
+}
+
+/** Validates a create-token request payload. */
+export function parseCreateTokenRequest(value: unknown, path = "$"): CreateTokenRequest {
+  return createTokenRequest(value, path);
+}
+
+/** Validates an issued-token payload. */
+export function parseIssuedTokenResponse(value: unknown, path = "$"): IssuedTokenResponse {
+  return issuedTokenResponse(value, path);
+}
+
+/** Validates a token list payload. */
+export function parseTokenListResponse(value: unknown, path = "$"): TokenListResponse {
+  return tokenListResponse(value, path);
+}
+
+/** Validates a quarantine payload. */
+export function parseQuarantineResponse(value: unknown, path = "$"): QuarantineResponse {
+  return quarantineResponse(value, path);
+}
+
+/** Validates a quarantine list payload. */
+export function parseQuarantineListResponse(value: unknown, path = "$"): QuarantineListResponse {
+  return quarantineListResponse(value, path);
+}
+
+/** Validates a recover-quarantine request payload. */
+export function parseRecoverQuarantineRequest(
+  value: unknown,
+  path = "$",
+): RecoverQuarantineRequest {
+  return recoverQuarantineRequest(value, path);
+}
+
+/** Validates a mail-credential payload. */
+export function parseMailCredentialResponse(value: unknown, path = "$"): MailCredentialResponse {
+  return mailCredentialResponse(value, path);
+}
+
+/** Validates a rotate-mail-credential payload. */
+export function parseRotateMailCredentialResponse(
+  value: unknown,
+  path = "$",
+): RotateMailCredentialResponse {
+  return rotateMailCredentialResponse(value, path);
+}
+
+/** Validates a passkey payload. */
+export function parsePasskeyResponse(value: unknown, path = "$"): PasskeyResponse {
+  return passkeyResponse(value, path);
 }

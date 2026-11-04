@@ -97,6 +97,9 @@
             version = "0.0.0";
             src = serverSrc;
             cargoLock.lockFile = ./apps/server/Cargo.lock;
+            # `webauthn-rs` links OpenSSL for attestation certificate parsing.
+            nativeBuildInputs = [ pkgs.pkg-config ];
+            buildInputs = [ pkgs.openssl ];
             meta = {
               description = "Wickmail alias service, policy engine, and management API";
               license = lib.licenses.agpl3Only;
@@ -157,7 +160,8 @@
               version = "0.0.0";
               src = serverSrc;
               cargoLock.lockFile = ./apps/server/Cargo.lock;
-              nativeBuildInputs = rustToolchain;
+              nativeBuildInputs = rustToolchain ++ [ pkgs.pkg-config ];
+              buildInputs = [ pkgs.openssl ];
               doCheck = false;
               buildPhase = ''
                 runHook preBuild
@@ -247,6 +251,7 @@
               pkgs.rspamd
               pkgs.swaks
               pkgs.openssl
+              pkgs.pkg-config
               pkgs.sqlite
               # Nix formatting.
               pkgs.nixfmt

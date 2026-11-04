@@ -1,0 +1,9 @@
+{
+  "session": {
+    "id": "018f9b60-0000-7000-8000-0000000000c1",
+    "createdAt": "2026-01-04T00:00:00Z",
+    "lastUsedAt": "2026-01-04T00:00:00Z",
+    "expiresAt": "2026-02-03T00:00:00Z"
+  },
+  "csrfToken": "csrf-token"
+}

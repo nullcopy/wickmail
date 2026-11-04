@@ -1,0 +1,16 @@
+{
+  "token": "wmk_abcd_secret",
+  "record": {
+    "id": "018f9b60-0000-7000-8000-0000000000c2",
+    "name": "ci",
+    "prefix": "abcd",
+    "scopes": [
+      "aliases:read",
+      "messages:reply"
+    ],
+    "createdAt": "2026-01-04T00:00:00Z",
+    "expiresAt": "2027-01-01T00:00:00Z",
+    "revokedAt": null,
+    "lastUsedAt": null
+  }
+}

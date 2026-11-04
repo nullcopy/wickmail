@@ -6,6 +6,7 @@
 //! truth tables, and lifecycle audit events. The mail path, HTTP management
 //! API, and clients build on these entry points.
 
+pub mod abuse;
 pub mod address;
 pub mod alias;
 pub mod api;
@@ -14,6 +15,8 @@ pub mod clock;
 pub mod contract;
 pub mod db;
 pub mod generator;
+pub mod http;
+pub mod identity;
 pub mod lease;
 pub mod mail;
 pub mod message;
@@ -21,8 +24,13 @@ pub mod quarantine;
 pub mod reply;
 pub mod service;
 pub mod timestamp;
+pub mod token;
 pub mod wordlist;
 
+pub use abuse::{
+    AbusePolicy, AlertKind, Alerter, LogAlerter, RateLimit, RateLimited, RateLimiter,
+    RecordingAlerter, is_disk_full,
+};
 pub use address::{AddressError, CanonicalAddress, Domain};
 pub use alias::{Alias, AliasId, AliasState, DEFAULT_LEASE_SECONDS};
 pub use api::{
@@ -37,6 +45,11 @@ pub use audit::{
 pub use clock::{Clock, FixedClock, SharedClock, SystemClock};
 pub use db::{MIGRATIONS, Migration, Store, StoreError, latest_version};
 pub use generator::{AliasGenerator, GenerateError};
+pub use http::{AppState, HttpConfig, HttpError, SameSite, router, serve_http};
+pub use identity::{
+    AuthError, IdentityService, MailCredential, PasskeyRecord, RecoveryCode, RecoveryCodeId,
+    Session, SessionId, User, UserId, hash_password, hash_secret, verify_password,
+};
 pub use lease::{
     LeaseError, ManualAction, OutboundDecision, apply_manual_action, apply_outbound,
     evaluate_outbound, evaluate_state, record_inbound,
@@ -54,6 +67,7 @@ pub use reply::{
 };
 pub use service::{AliasService, CreateAlias, ExpiryChoice, OutboundOutcome, ServiceError};
 pub use timestamp::Timestamp;
+pub use token::{ApiToken, IssuedToken, Scope, ScopeSet, TokenError, TokenId};
 
 /// Product name reported by the server and used in diagnostics.
 pub const PRODUCT_NAME: &str = "wickmail-server";

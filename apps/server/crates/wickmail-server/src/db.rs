@@ -14,9 +14,13 @@ use thiserror::Error;
 use crate::address::CanonicalAddress;
 use crate::alias::{Alias, AliasId};
 use crate::audit::{AuditEvent, AuditEventId, AuditEventKind};
+use crate::identity::{
+    MailCredential, PasskeyRecord, RecoveryCode, Session, SessionId, User, UserId,
+};
 use crate::mail::store::MailboxLocator;
 use crate::message::{Message, MessageId, Route};
 use crate::quarantine::{QuarantineKind, QuarantineMetadata, QuarantineStatus};
+use crate::token::{ApiToken, ScopeSet, TokenId};
 
 /// A single forward-and-revert database migration.
 #[derive(Clone, Copy, Debug)]
@@ -178,6 +182,82 @@ ALTER TABLE quarantine_metadata DROP COLUMN size_bytes;
 ALTER TABLE quarantine_metadata DROP COLUMN kind;
 ",
     },
+    Migration {
+        version: 8,
+        name: "identity",
+        up: "\
+CREATE TABLE users (
+    id TEXT PRIMARY KEY NOT NULL,
+    username TEXT NOT NULL UNIQUE,
+    primary_address TEXT NOT NULL,
+    password_hash TEXT,
+    created_at INTEGER NOT NULL,
+    password_changed_at INTEGER,
+    setup_token_hash TEXT,
+    setup_token_expires_at INTEGER,
+    setup_completed_at INTEGER
+);
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL,
+    csrf_token TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER
+);
+CREATE INDEX sessions_user_idx ON sessions (user_id);
+CREATE INDEX sessions_token_hash_idx ON sessions (token_hash);
+CREATE TABLE recovery_codes (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    used_at INTEGER
+);
+CREATE INDEX recovery_codes_user_idx ON recovery_codes (user_id);
+CREATE TABLE passkeys (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    credential TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+CREATE TABLE mail_credentials (
+    user_id TEXT PRIMARY KEY NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    password_hash TEXT,
+    created_at INTEGER NOT NULL,
+    rotated_at INTEGER,
+    revoked_at INTEGER
+);
+CREATE TABLE idempotency_keys (
+    key TEXT PRIMARY KEY NOT NULL,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    response_status INTEGER NOT NULL,
+    response_body TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+ALTER TABLE api_tokens ADD COLUMN prefix TEXT;
+ALTER TABLE api_tokens ADD COLUMN user_id TEXT REFERENCES users(id);
+",
+        down: "\
+ALTER TABLE api_tokens DROP COLUMN user_id;
+ALTER TABLE api_tokens DROP COLUMN prefix;
+DROP TABLE idempotency_keys;
+DROP TABLE mail_credentials;
+DROP TABLE passkeys;
+DROP INDEX recovery_codes_user_idx;
+DROP TABLE recovery_codes;
+DROP INDEX sessions_token_hash_idx;
+DROP INDEX sessions_user_idx;
+DROP TABLE sessions;
+DROP TABLE users;
+",
+    },
 ];
 
 /// The highest known migration version.
@@ -200,6 +280,9 @@ pub enum StoreError {
     /// The alias does not exist.
     #[error("alias not found: {0}")]
     NotFound(AliasId),
+    /// The management user does not exist.
+    #[error("user not found: {0}")]
+    MissingUser(UserId),
     /// Stored data could not be decoded.
     #[error("invalid stored data: {0}")]
     Corrupt(String),
@@ -208,6 +291,25 @@ pub enum StoreError {
 /// A single-owner connection to the Wickmail database.
 pub struct Store {
     connection: Connection,
+}
+
+/// A stored idempotent mutation response.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdempotencyRecord {
+    /// Client-supplied idempotency key.
+    pub key: String,
+    /// HTTP method.
+    pub method: String,
+    /// Request path.
+    pub path: String,
+    /// Hash of the request body.
+    pub request_hash: String,
+    /// Stored response status code.
+    pub response_status: i64,
+    /// Stored response body.
+    pub response_body: String,
+    /// When the record was written.
+    pub created_at: crate::timestamp::Timestamp,
 }
 
 impl Store {
@@ -735,6 +837,604 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(ids)
     }
+
+    /// Inserts the single management user.
+    pub fn insert_user(&self, user: &User) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO users (
+                id, username, primary_address, password_hash, created_at,
+                password_changed_at, setup_token_hash, setup_token_expires_at,
+                setup_completed_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                user.id,
+                user.username,
+                user.primary_address,
+                user.password_hash,
+                user.created_at,
+                user.password_changed_at,
+                user.setup_token_hash,
+                user.setup_token_expires_at,
+                user.setup_completed_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Loads the single management user, if one exists.
+    pub fn get_user(&self) -> Result<Option<User>, StoreError> {
+        self.connection
+            .query_row(
+                &format!("SELECT {USER_COLUMNS} FROM users ORDER BY created_at ASC LIMIT 1"),
+                [],
+                row_to_user,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Loads a user by identifier.
+    pub fn get_user_by_id(&self, id: UserId) -> Result<Option<User>, StoreError> {
+        self.connection
+            .query_row(
+                &format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?1"),
+                params![id],
+                row_to_user,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Updates the management user.
+    pub fn update_user(&self, user: &User) -> Result<(), StoreError> {
+        let changed = self.connection.execute(
+            "UPDATE users SET
+                username = ?2,
+                primary_address = ?3,
+                password_hash = ?4,
+                created_at = ?5,
+                password_changed_at = ?6,
+                setup_token_hash = ?7,
+                setup_token_expires_at = ?8,
+                setup_completed_at = ?9
+             WHERE id = ?1",
+            params![
+                user.id,
+                user.username,
+                user.primary_address,
+                user.password_hash,
+                user.created_at,
+                user.password_changed_at,
+                user.setup_token_hash,
+                user.setup_token_expires_at,
+                user.setup_completed_at,
+            ],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::MissingUser(user.id));
+        }
+        Ok(())
+    }
+
+    /// Inserts a session.
+    pub fn insert_session(&self, session: &Session) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO sessions (
+                id, user_id, token_hash, csrf_token, created_at, last_used_at,
+                expires_at, revoked_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                session.id,
+                session.user_id,
+                session.token_hash,
+                session.csrf_token,
+                session.created_at,
+                session.last_used_at,
+                session.expires_at,
+                session.revoked_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Loads a session by its token hash.
+    pub fn get_session_by_hash(&self, hash: &str) -> Result<Option<Session>, StoreError> {
+        self.connection
+            .query_row(
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE token_hash = ?1"),
+                params![hash],
+                row_to_session,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Loads a session by identifier.
+    pub fn get_session(&self, id: SessionId) -> Result<Option<Session>, StoreError> {
+        self.connection
+            .query_row(
+                &format!("SELECT {SESSION_COLUMNS} FROM sessions WHERE id = ?1"),
+                params![id],
+                row_to_session,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Updates a session's mutable fields.
+    pub fn update_session(&self, session: &Session) -> Result<(), StoreError> {
+        self.connection.execute(
+            "UPDATE sessions SET
+                user_id = ?2,
+                token_hash = ?3,
+                csrf_token = ?4,
+                created_at = ?5,
+                last_used_at = ?6,
+                expires_at = ?7,
+                revoked_at = ?8
+             WHERE id = ?1",
+            params![
+                session.id,
+                session.user_id,
+                session.token_hash,
+                session.csrf_token,
+                session.created_at,
+                session.last_used_at,
+                session.expires_at,
+                session.revoked_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Revokes a single session. Returns whether a live session was revoked.
+    pub fn revoke_session(
+        &self,
+        id: SessionId,
+        at: crate::timestamp::Timestamp,
+    ) -> Result<bool, StoreError> {
+        let changed = self.connection.execute(
+            "UPDATE sessions SET revoked_at = coalesce(revoked_at, ?2) WHERE id = ?1",
+            params![id, at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Revokes every session for a user. Returns the number revoked.
+    pub fn revoke_user_sessions(
+        &self,
+        user_id: UserId,
+        at: crate::timestamp::Timestamp,
+    ) -> Result<usize, StoreError> {
+        let changed = self.connection.execute(
+            "UPDATE sessions SET revoked_at = ?2
+             WHERE user_id = ?1 AND revoked_at IS NULL",
+            params![user_id, at],
+        )?;
+        Ok(changed)
+    }
+
+    /// Lists a user's sessions, newest first.
+    pub fn list_user_sessions(&self, user_id: UserId) -> Result<Vec<Session>, StoreError> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {SESSION_COLUMNS} FROM sessions WHERE user_id = ?1
+             ORDER BY created_at DESC, id ASC"
+        ))?;
+        let rows = statement.query_map(params![user_id], row_to_session)?;
+        let mut sessions = Vec::new();
+        for row in rows {
+            sessions.push(row?);
+        }
+        Ok(sessions)
+    }
+
+    /// Deletes sessions that expired before `before`.
+    pub fn delete_expired_sessions(
+        &self,
+        before: crate::timestamp::Timestamp,
+    ) -> Result<usize, StoreError> {
+        let removed = self.connection.execute(
+            "DELETE FROM sessions WHERE expires_at <= ?1",
+            params![before],
+        )?;
+        Ok(removed)
+    }
+
+    /// Inserts a one-time recovery code.
+    pub fn insert_recovery_code(&self, code: &RecoveryCode) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO recovery_codes (id, user_id, code_hash, created_at, used_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                code.id,
+                code.user_id,
+                code.code_hash,
+                code.created_at,
+                code.used_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Lists a user's recovery codes, oldest first.
+    pub fn list_recovery_codes(&self, user_id: UserId) -> Result<Vec<RecoveryCode>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, user_id, code_hash, created_at, used_at
+             FROM recovery_codes WHERE user_id = ?1 ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![user_id], |row| {
+            Ok(RecoveryCode {
+                id: row.get("id")?,
+                user_id: row.get("user_id")?,
+                code_hash: row.get("code_hash")?,
+                created_at: row.get("created_at")?,
+                used_at: row.get("used_at")?,
+            })
+        })?;
+        let mut codes = Vec::new();
+        for row in rows {
+            codes.push(row?);
+        }
+        Ok(codes)
+    }
+
+    /// Marks a recovery code used.
+    pub fn update_recovery_code(&self, code: &RecoveryCode) -> Result<(), StoreError> {
+        self.connection.execute(
+            "UPDATE recovery_codes SET used_at = ?2 WHERE id = ?1",
+            params![code.id, code.used_at],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes every recovery code for a user. Returns the number removed.
+    pub fn delete_recovery_codes(&self, user_id: UserId) -> Result<usize, StoreError> {
+        let removed = self.connection.execute(
+            "DELETE FROM recovery_codes WHERE user_id = ?1",
+            params![user_id],
+        )?;
+        Ok(removed)
+    }
+
+    /// Inserts a passkey credential.
+    pub fn insert_passkey(&self, record: &PasskeyRecord) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO passkeys (id, user_id, name, credential, created_at, last_used_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                record.id,
+                record.user_id,
+                record.name,
+                record.credential,
+                record.created_at,
+                record.last_used_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Lists a user's passkeys, oldest first.
+    pub fn list_passkeys(&self, user_id: UserId) -> Result<Vec<PasskeyRecord>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, user_id, name, credential, created_at, last_used_at
+             FROM passkeys WHERE user_id = ?1 ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![user_id], row_to_passkey)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    /// Loads a passkey by credential identifier.
+    pub fn get_passkey(&self, id: &str) -> Result<Option<PasskeyRecord>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT id, user_id, name, credential, created_at, last_used_at
+                 FROM passkeys WHERE id = ?1",
+                params![id],
+                row_to_passkey,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Deletes a passkey. Returns whether one was removed.
+    pub fn delete_passkey(&self, id: &str) -> Result<bool, StoreError> {
+        let removed = self
+            .connection
+            .execute("DELETE FROM passkeys WHERE id = ?1", params![id])?;
+        Ok(removed > 0)
+    }
+
+    /// Records a passkey use.
+    pub fn touch_passkey(
+        &self,
+        id: &str,
+        at: crate::timestamp::Timestamp,
+    ) -> Result<(), StoreError> {
+        self.connection.execute(
+            "UPDATE passkeys SET last_used_at = ?2 WHERE id = ?1",
+            params![id, at],
+        )?;
+        Ok(())
+    }
+
+    /// Updates a passkey's stored credential and last-used time.
+    pub fn update_passkey_credential(
+        &self,
+        id: &str,
+        credential: &str,
+        at: crate::timestamp::Timestamp,
+    ) -> Result<(), StoreError> {
+        self.connection.execute(
+            "UPDATE passkeys SET credential = ?2, last_used_at = ?3 WHERE id = ?1",
+            params![id, credential, at],
+        )?;
+        Ok(())
+    }
+
+    /// Loads the mail credential, if one exists.
+    pub fn get_mail_credential(&self) -> Result<Option<MailCredential>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT user_id, password_hash, created_at, rotated_at, revoked_at
+                 FROM mail_credentials ORDER BY created_at ASC LIMIT 1",
+                [],
+                |row| {
+                    Ok(MailCredential {
+                        user_id: row.get("user_id")?,
+                        password_hash: row.get("password_hash")?,
+                        created_at: row.get("created_at")?,
+                        rotated_at: row.get("rotated_at")?,
+                        revoked_at: row.get("revoked_at")?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Inserts or replaces the mail credential.
+    pub fn upsert_mail_credential(&self, credential: &MailCredential) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO mail_credentials (user_id, password_hash, created_at, rotated_at, revoked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(user_id) DO UPDATE SET
+                password_hash = excluded.password_hash,
+                created_at = excluded.created_at,
+                rotated_at = excluded.rotated_at,
+                revoked_at = excluded.revoked_at",
+            params![
+                credential.user_id,
+                credential.password_hash,
+                credential.created_at,
+                credential.rotated_at,
+                credential.revoked_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Inserts an API token.
+    pub fn insert_api_token(&self, token: &ApiToken) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO api_tokens (
+                id, name, token_hash, scopes, created_at, expires_at, revoked_at,
+                last_used_at, prefix, user_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                token.id,
+                token.name,
+                token.token_hash,
+                token.scopes.to_storage(),
+                token.created_at,
+                token.expires_at,
+                token.revoked_at,
+                token.last_used_at,
+                token.prefix,
+                token.user_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Lists API tokens, newest first.
+    pub fn list_api_tokens(&self) -> Result<Vec<ApiToken>, StoreError> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {TOKEN_COLUMNS} FROM api_tokens ORDER BY created_at DESC, id ASC"
+        ))?;
+        let rows = statement.query_map([], row_to_token)?;
+        let mut tokens = Vec::new();
+        for row in rows {
+            tokens.push(row?);
+        }
+        Ok(tokens)
+    }
+
+    /// Loads an API token by identifier.
+    pub fn get_api_token(&self, id: TokenId) -> Result<Option<ApiToken>, StoreError> {
+        self.connection
+            .query_row(
+                &format!("SELECT {TOKEN_COLUMNS} FROM api_tokens WHERE id = ?1"),
+                params![id],
+                row_to_token,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Loads an API token by its secret hash.
+    pub fn get_api_token_by_hash(&self, hash: &str) -> Result<Option<ApiToken>, StoreError> {
+        self.connection
+            .query_row(
+                &format!("SELECT {TOKEN_COLUMNS} FROM api_tokens WHERE token_hash = ?1"),
+                params![hash],
+                row_to_token,
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Revokes an API token. Returns whether a live token was revoked.
+    pub fn revoke_api_token(
+        &self,
+        id: TokenId,
+        at: crate::timestamp::Timestamp,
+    ) -> Result<bool, StoreError> {
+        let changed = self.connection.execute(
+            "UPDATE api_tokens SET revoked_at = coalesce(revoked_at, ?2) WHERE id = ?1",
+            params![id, at],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Records an API token use.
+    pub fn touch_api_token(
+        &self,
+        id: TokenId,
+        at: crate::timestamp::Timestamp,
+    ) -> Result<(), StoreError> {
+        self.connection.execute(
+            "UPDATE api_tokens SET last_used_at = ?2 WHERE id = ?1",
+            params![id, at],
+        )?;
+        Ok(())
+    }
+
+    /// Loads a stored idempotent response.
+    pub fn get_idempotency(&self, key: &str) -> Result<Option<IdempotencyRecord>, StoreError> {
+        self.connection
+            .query_row(
+                "SELECT key, method, path, request_hash, response_status, response_body, created_at
+                 FROM idempotency_keys WHERE key = ?1",
+                params![key],
+                |row| {
+                    Ok(IdempotencyRecord {
+                        key: row.get("key")?,
+                        method: row.get("method")?,
+                        path: row.get("path")?,
+                        request_hash: row.get("request_hash")?,
+                        response_status: row.get("response_status")?,
+                        response_body: row.get("response_body")?,
+                        created_at: row.get("created_at")?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    /// Stores an idempotent response, replacing an existing record.
+    pub fn insert_idempotency(&self, record: &IdempotencyRecord) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO idempotency_keys (
+                key, method, path, request_hash, response_status, response_body, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(key) DO UPDATE SET
+                method = excluded.method,
+                path = excluded.path,
+                request_hash = excluded.request_hash,
+                response_status = excluded.response_status,
+                response_body = excluded.response_body,
+                created_at = excluded.created_at",
+            params![
+                record.key,
+                record.method,
+                record.path,
+                record.request_hash,
+                record.response_status,
+                record.response_body,
+                record.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Purges idempotency records created before `before`.
+    pub fn purge_idempotency(
+        &self,
+        before: crate::timestamp::Timestamp,
+    ) -> Result<usize, StoreError> {
+        let removed = self.connection.execute(
+            "DELETE FROM idempotency_keys WHERE created_at <= ?1",
+            params![before],
+        )?;
+        Ok(removed)
+    }
+}
+
+const USER_COLUMNS: &str = "id, username, primary_address, password_hash, created_at, \
+     password_changed_at, setup_token_hash, setup_token_expires_at, setup_completed_at";
+
+fn row_to_user(row: &Row<'_>) -> rusqlite::Result<User> {
+    Ok(User {
+        id: row.get("id")?,
+        username: row.get("username")?,
+        primary_address: row.get("primary_address")?,
+        password_hash: row.get("password_hash")?,
+        created_at: row.get("created_at")?,
+        password_changed_at: row.get("password_changed_at")?,
+        setup_token_hash: row.get("setup_token_hash")?,
+        setup_token_expires_at: row.get("setup_token_expires_at")?,
+        setup_completed_at: row.get("setup_completed_at")?,
+    })
+}
+
+const SESSION_COLUMNS: &str =
+    "id, user_id, token_hash, csrf_token, created_at, last_used_at, expires_at, revoked_at";
+
+fn row_to_session(row: &Row<'_>) -> rusqlite::Result<Session> {
+    Ok(Session {
+        id: row.get("id")?,
+        user_id: row.get("user_id")?,
+        token_hash: row.get("token_hash")?,
+        csrf_token: row.get("csrf_token")?,
+        created_at: row.get("created_at")?,
+        last_used_at: row.get("last_used_at")?,
+        expires_at: row.get("expires_at")?,
+        revoked_at: row.get("revoked_at")?,
+    })
+}
+
+fn row_to_passkey(row: &Row<'_>) -> rusqlite::Result<PasskeyRecord> {
+    Ok(PasskeyRecord {
+        id: row.get("id")?,
+        user_id: row.get("user_id")?,
+        name: row.get("name")?,
+        credential: row.get("credential")?,
+        created_at: row.get("created_at")?,
+        last_used_at: row.get("last_used_at")?,
+    })
+}
+
+const TOKEN_COLUMNS: &str = "id, name, token_hash, scopes, created_at, expires_at, revoked_at, \
+     last_used_at, prefix, user_id";
+
+fn row_to_token(row: &Row<'_>) -> rusqlite::Result<ApiToken> {
+    let scopes_text: String = row.get("scopes")?;
+    let scopes = ScopeSet::from_storage(&scopes_text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            3,
+            rusqlite::types::Type::Text,
+            Box::new(StoreError::Corrupt(error.to_string())),
+        )
+    })?;
+    Ok(ApiToken {
+        id: row.get("id")?,
+        user_id: row
+            .get::<_, Option<UserId>>("user_id")?
+            .unwrap_or_else(UserId::new),
+        name: row.get("name")?,
+        prefix: row.get::<_, Option<String>>("prefix")?.unwrap_or_default(),
+        scopes,
+        created_at: row.get("created_at")?,
+        expires_at: row.get("expires_at")?,
+        revoked_at: row.get("revoked_at")?,
+        last_used_at: row.get("last_used_at")?,
+        token_hash: row.get("token_hash")?,
+    })
 }
 
 fn route_to_str(route: Route) -> &'static str {
@@ -951,6 +1651,12 @@ mod tests {
         "quarantine_metadata",
         "audit_events",
         "api_tokens",
+        "users",
+        "sessions",
+        "recovery_codes",
+        "passkeys",
+        "mail_credentials",
+        "idempotency_keys",
     ];
 
     #[test]

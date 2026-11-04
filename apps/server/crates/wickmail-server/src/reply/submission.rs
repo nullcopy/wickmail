@@ -10,15 +10,17 @@
 
 use crate::address::CanonicalAddress;
 use crate::alias::AliasId;
-use crate::api::{ReplyIdentityOption, ReplyResponse};
+use crate::api::{ReplyIdentityDecision, ReplyIdentityOption, ReplyRequest, ReplyResponse};
 use crate::lease::{OutboundDecision, evaluate_outbound};
+use crate::mail::store::MailStoreAdapter;
 use crate::message::MessageId;
 use crate::service::AliasService;
 use crate::timestamp::Timestamp;
 
 use super::ReplyError;
+use super::context::fetch_reply_context;
 use super::dkim::DkimSigner;
-use super::outbound::{EnforceOptions, enforce_outbound_identity};
+use super::outbound::{ComposeReply, EnforceOptions, compose_reply, enforce_outbound_identity};
 use super::queue::{OutboundMessage, OutboundMeta, OutboundQueue};
 
 /// Input for an authenticated outbound submission.
@@ -33,6 +35,76 @@ pub struct SubmitOutbound {
     pub envelope_sender: Option<String>,
     /// Overrides the generated message identity, for deterministic tests.
     pub message_id: Option<MessageId>,
+}
+
+/// Fetches reply context and submits a reply as the selected identity.
+///
+/// This is the single implementation shared by the reply client and the
+/// management API, so both enforce the same provenance, identity, and lease
+/// rules.
+#[allow(clippy::too_many_arguments)]
+pub fn submit_reply(
+    service: &AliasService,
+    mail: &MailStoreAdapter,
+    queue: &dyn OutboundQueue,
+    dkim: Option<&DkimSigner>,
+    primary: Option<&CanonicalAddress>,
+    message_id: MessageId,
+    request: &ReplyRequest,
+    now: Timestamp,
+) -> Result<ReplyResponse, ReplyError> {
+    let context = fetch_reply_context(service.store(), mail, message_id, primary)?
+        .ok_or(ReplyError::MessageNotFound(message_id))?;
+    let identity = resolve_reply_identity(&context.identity, request.alias_id)?;
+    let to = context.from.clone().ok_or(ReplyError::NoSender)?;
+    let outbound_id = MessageId::new();
+    let raw = compose_reply(&ComposeReply {
+        identity: identity.clone(),
+        to: to.clone(),
+        subject: context.subject.clone(),
+        original_message_id: context.original_message_id.clone(),
+        body: request.body.clone(),
+        quoted_text: request.quoted_text.clone(),
+        message_id: outbound_id,
+        now,
+    });
+
+    submit_outbound(
+        service,
+        queue,
+        dkim,
+        primary.map(std::slice::from_ref).unwrap_or(&[]),
+        SubmitOutbound {
+            identity,
+            raw,
+            recipients: vec![to],
+            envelope_sender: None,
+            message_id: Some(outbound_id),
+        },
+        now,
+    )
+}
+
+/// Resolves a requested alias against the identities provenance allows.
+///
+/// A requested alias must be one of the offered options; omitting it uses the
+/// server-selected default and fails when the client must prompt.
+pub fn resolve_reply_identity(
+    decision: &ReplyIdentityDecision,
+    requested: Option<AliasId>,
+) -> Result<ReplyIdentityOption, ReplyError> {
+    match requested {
+        Some(alias_id) => decision
+            .options
+            .iter()
+            .find(|option| option.alias_id() == Some(alias_id))
+            .cloned()
+            .ok_or(ReplyError::IdentityNotAllowed),
+        None => decision
+            .selected
+            .clone()
+            .ok_or(ReplyError::IdentityRequired),
+    }
 }
 
 /// Submits an authenticated outbound message and renews its alias.
