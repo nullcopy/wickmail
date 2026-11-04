@@ -37,6 +37,12 @@ node_modules/
 npm-debug.log*
 yarn-error.log*
 .pnpm-store/
+*.tsbuildinfo
+
+# Nix
+result
+result-*
+.direnv/
 
 # Go
 *.test
