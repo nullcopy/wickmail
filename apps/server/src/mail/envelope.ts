@@ -40,7 +40,8 @@ export function visibleRecipients(raw: string): string[] {
   return addresses;
 }
 
-function splitAddressList(value: string): string[] {
+/** Split a header address list into bare addresses, without canonicalizing. */
+export function splitAddressList(value: string): string[] {
   const parts: string[] = [];
   let current = "";
   let inQuotes = false;
