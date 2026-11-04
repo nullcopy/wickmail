@@ -35,9 +35,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up the Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Run unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
 
