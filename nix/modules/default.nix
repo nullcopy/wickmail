@@ -170,6 +170,38 @@ in
       description = "Dovecot SASL socket Postfix submission authenticates against.";
     };
 
+    enableManagementApi = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Serve the authenticated `/v1` management API and the built web app from
+        the same origin. Management credentials are created with the
+        `wickmail-server bootstrap` command; there are no default credentials.
+      '';
+    };
+
+    httpListen = mkOption {
+      type = types.str;
+      default = "127.0.0.1:8080";
+      description = "Address the management API listens on.";
+    };
+
+    webPackage = mkOption {
+      type = types.package;
+      default = self.packages.${system}.wickmail-web;
+      defaultText = lib.literalExpression "self.packages.\${system}.wickmail-web";
+      description = "The built web app served by the management API.";
+    };
+
+    cookieSecure = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Whether the management session cookie carries `Secure`. Disable only
+        when serving the API over plain HTTP on a trusted host.
+      '';
+    };
+
     extraPostfixSettings = mkOption {
       type = types.attrsOf types.anything;
       default = { };
@@ -200,6 +232,7 @@ in
       "d ${cfg.mailRoot}/sieve-bin 0750 ${cfg.mailUser} ${cfg.mailGroup} -"
       "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
       "d ${cfg.stateDir}/spool 0750 ${cfg.user} ${cfg.group} -"
+      "d ${cfg.stateDir}/outbound 0750 ${cfg.user} ${cfg.group} -"
     ];
 
     environment.etc."dovecot/sieve/before/global.sieve".source = globalSieve;
@@ -341,22 +374,30 @@ in
       before = [ "postfix.service" ];
       wants = [ "dovecot.service" ];
       serviceConfig = {
-        ExecStart = lib.concatStringsSep " " [
-          "${cfg.package}/bin/wickmail-server"
-          "serve"
-          "--db ${cfg.stateDir}/wickmail.sqlite"
-          "--domain ${cfg.domain}"
-          "--primary ${cfg.primaryAddress}"
-          "--policy-socket ${runDir}/policy.sock"
-          "--submission-socket ${runDir}/submission.sock"
-          "--lmtp-socket ${runDir}/lmtp.sock"
-          "--dovecot-lmtp unix:/run/dovecot2/lmtp"
-          "--spool-dir ${cfg.stateDir}/spool"
-          "--max-spool ${toString cfg.maxSpoolEntries}"
-          "--hostname ${cfg.hostname}"
-          "--maildir ${cfg.maildir}"
-          "--quarantine-dir ${cfg.quarantineDir}"
-        ];
+        ExecStart = lib.concatStringsSep " " (
+          [
+            "${cfg.package}/bin/wickmail-server"
+            "serve"
+            "--db ${cfg.stateDir}/wickmail.sqlite"
+            "--domain ${cfg.domain}"
+            "--primary ${cfg.primaryAddress}"
+            "--policy-socket ${runDir}/policy.sock"
+            "--submission-socket ${runDir}/submission.sock"
+            "--lmtp-socket ${runDir}/lmtp.sock"
+            "--dovecot-lmtp unix:/run/dovecot2/lmtp"
+            "--spool-dir ${cfg.stateDir}/spool"
+            "--max-spool ${toString cfg.maxSpoolEntries}"
+            "--hostname ${cfg.hostname}"
+            "--maildir ${cfg.maildir}"
+            "--quarantine-dir ${cfg.quarantineDir}"
+          ]
+          ++ lib.optionals cfg.enableManagementApi [
+            "--http-listen ${cfg.httpListen}"
+            "--web-root ${cfg.webPackage}/share/wickmail-web"
+            "--outbound-dir ${cfg.stateDir}/outbound"
+          ]
+          ++ lib.optional (!cfg.cookieSecure) "--cookie-insecure"
+        );
         # The proxy needs access to the mail store and the Dovecot LMTP socket;
         # privilege separation is tracked separately.
         User = "root";
