@@ -80,6 +80,8 @@ fn address(value: &str) -> CanonicalAddress {
 
 struct Harness {
     _dir: tempfile::TempDir,
+    db_path: PathBuf,
+    outbound_dir: PathBuf,
     service: Arc<Mutex<AliasService>>,
     maildir: PathBuf,
     queue: Arc<dyn OutboundQueue>,
@@ -90,7 +92,8 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(dir.path().join("wickmail.sqlite")).unwrap();
+        let db_path = dir.path().join("wickmail.sqlite");
+        let mut store = Store::open(&db_path).unwrap();
         store.migrate().unwrap();
         let clock: SharedClock = Arc::new(FixedClock::new(at(NOW)));
         let service = Arc::new(Mutex::new(AliasService::new(
@@ -124,6 +127,8 @@ impl Harness {
 
         Self {
             _dir: dir,
+            db_path,
+            outbound_dir: queue_dir,
             service,
             maildir,
             queue,
@@ -420,4 +425,69 @@ fn the_primary_address_is_stripped_from_outbound_headers() {
         .unwrap();
     let queued = harness.queue.get(response.message_id).unwrap().unwrap();
     assert_eq!(header(&queued.raw, "X-Real-User"), None);
+}
+
+#[test]
+fn the_cli_drives_context_fetch_and_reply_submission() {
+    let harness = Harness::new();
+    let alias = harness.create_alias("green.farm@example.com", at("2035-01-01T00:00:00Z"), true);
+    let message_id = MessageId::new();
+    harness.deliver(
+        message_id,
+        &[alias.id],
+        false,
+        "From: sender@example.net\r\nSubject: CLI\r\n\r\nbody\r\n",
+    );
+
+    let binary = env!("CARGO_BIN_EXE_wickmail-server");
+    let invoke = |command: &str| {
+        let mut process = std::process::Command::new(binary);
+        process
+            .arg(command)
+            .arg(message_id.to_string())
+            .arg("--db")
+            .arg(&harness.db_path)
+            .arg("--domain")
+            .arg("example.com")
+            .arg("--maildir")
+            .arg(&harness.maildir)
+            .arg("--outbound-dir")
+            .arg(&harness.outbound_dir)
+            .arg("--primary")
+            .arg(PRIMARY);
+        process
+    };
+
+    let context = invoke("reply-context").output().unwrap();
+    assert!(
+        context.status.success(),
+        "{}",
+        String::from_utf8_lossy(&context.stderr)
+    );
+    let context_text = String::from_utf8_lossy(&context.stdout);
+    assert!(
+        context_text.contains("\"subject\": \"CLI\""),
+        "{context_text}"
+    );
+    assert!(
+        context_text.contains("\"from\": \"sender@example.net\""),
+        "{context_text}"
+    );
+
+    let reply = invoke("reply")
+        .arg("--alias")
+        .arg(alias.id.to_string())
+        .arg("--body")
+        .arg("hello")
+        .output()
+        .unwrap();
+    assert!(
+        reply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reply.stderr)
+    );
+    let reply_text = String::from_utf8_lossy(&reply.stdout);
+    assert!(reply_text.contains("\"queued\": true"), "{reply_text}");
+
+    assert_eq!(harness.queue.list().unwrap().len(), 1);
 }

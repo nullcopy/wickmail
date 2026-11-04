@@ -153,6 +153,23 @@ in
       description = "Run Rspamd as a Postfix milter before the LMTP proxy.";
     };
 
+    enableSubmission = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Route Postfix authenticated submission through the Wickmail ownership
+        check. The submission service accepts the primary address and owned
+        aliases whose lease permits outbound mail. Authentication uses Dovecot
+        SASL, which must be reachable at `smtpd_sasl_path`.
+      '';
+    };
+
+    submissionSaslPath = mkOption {
+      type = types.str;
+      default = "/run/dovecot2/auth-client";
+      description = "Dovecot SASL socket Postfix submission authenticates against.";
+    };
+
     extraPostfixSettings = mkOption {
       type = types.attrsOf types.anything;
       default = { };
@@ -288,7 +305,30 @@ in
         access_map_reject_code = 550;
         milter_default_action = "accept";
       }
+      // lib.optionalAttrs cfg.enableSubmission {
+        # A restriction class lets the submission service reference the
+        # ownership check without embedding spaces in a master.cf argument.
+        smtpd_restriction_classes = "wickmail_sender";
+        wickmail_sender = "check_sender_access socketmap:unix:${runDir}/submission.sock:wickmail-submission";
+      }
       // cfg.extraPostfixSettings;
+    };
+
+    services.postfix.enableSubmission = cfg.enableSubmission;
+    services.postfix.submissionOptions = lib.mkIf cfg.enableSubmission {
+      smtpd_tls_security_level = "encrypt";
+      smtpd_sasl_auth_enable = "yes";
+      smtpd_sasl_type = "dovecot";
+      smtpd_sasl_path = cfg.submissionSaslPath;
+      # Require authentication at the recipient stage so the earlier sender
+      # ownership check always runs; `permit` in the client stage would accept
+      # the request before the sender is checked.
+      smtpd_recipient_restrictions = "permit_sasl_authenticated,reject";
+      # The envelope sender must be an owned identity whose lease permits
+      # outbound mail; the server's socketmap makes the decision.
+      smtpd_sender_restrictions = "wickmail_sender";
+      access_map_reject_code = "550";
+      milter_macro_daemon_name = "ORIGINATING";
     };
 
     systemd.services.wickmail = {
@@ -308,6 +348,7 @@ in
           "--domain ${cfg.domain}"
           "--primary ${cfg.primaryAddress}"
           "--policy-socket ${runDir}/policy.sock"
+          "--submission-socket ${runDir}/submission.sock"
           "--lmtp-socket ${runDir}/lmtp.sock"
           "--dovecot-lmtp unix:/run/dovecot2/lmtp"
           "--spool-dir ${cfg.stateDir}/spool"
