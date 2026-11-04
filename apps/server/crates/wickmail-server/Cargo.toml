@@ -1,0 +1,13 @@
+[package]
+name = "wickmail-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Policy lookup, LMTP proxy, lease engine, and management API for Wickmail"
+
+[lints]
+workspace = true
+
+[dependencies]
