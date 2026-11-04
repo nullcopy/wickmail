@@ -10,6 +10,7 @@
   import Spinner from "../components/Spinner.svelte";
   import ErrorBanner from "../components/ErrorBanner.svelte";
   import CopyButton from "../components/CopyButton.svelte";
+  import { nativeBridge, type NativeAppLockState } from "../lib/native";
 
   const ALL_SCOPES: Scope[] = [
     "aliases:read",
@@ -41,6 +42,10 @@
   let tokenScopes = $state<Scope[]>(["aliases:read"]);
   let tokenExpiry = $state("none");
 
+  // The Android shell injects this bridge; it is absent in a browser.
+  const native = nativeBridge();
+  let nativeLock = $state<NativeAppLockState | null>(null);
+
   async function load(): Promise<void> {
     loading = true;
     versionError = null;
@@ -71,6 +76,35 @@
   $effect(() => {
     void load();
   });
+
+  $effect(() => {
+    if (!native) return;
+    void native
+      .getAppLock()
+      .then((state) => (nativeLock = state))
+      .catch(() => {
+        // The shell may be busy; the section stays hidden until it answers.
+      });
+  });
+
+  async function setAppLock(enabled: boolean): Promise<void> {
+    if (!native) return;
+    try {
+      nativeLock = await native.setAppLock(enabled);
+      toasts.success(enabled ? "App lock enabled" : "App lock disabled");
+    } catch {
+      toasts.error("Could not update the app lock");
+    }
+  }
+
+  async function setLockTimeout(seconds: number): Promise<void> {
+    if (!native) return;
+    try {
+      nativeLock = await native.setLockTimeout(seconds);
+    } catch {
+      toasts.error("Could not update the lock timeout");
+    }
+  }
 
   function savePreferences(event: SubmitEvent): void {
     event.preventDefault();
@@ -219,6 +253,43 @@
         <button type="submit" class="button button-primary">Save preferences</button>
       </form>
     </section>
+
+    {#if native}
+      <section class="panel" aria-labelledby="android-heading">
+        <h2 id="android-heading">Android app</h2>
+        <label class="choice">
+          <input
+            type="checkbox"
+            checked={nativeLock?.enabled ?? false}
+            disabled={!nativeLock || !nativeLock.available}
+            onchange={(event) => setAppLock(event.currentTarget.checked)}
+          />
+          Require unlock when the app returns
+        </label>
+        <label class="field">
+          <span>Lock after</span>
+          <select
+            value={String(nativeLock?.timeoutSeconds ?? 60)}
+            disabled={!nativeLock || !nativeLock.available}
+            onchange={(event) => setLockTimeout(Number(event.currentTarget.value))}
+          >
+            <option value="0">Immediately</option>
+            <option value="60">1 minute</option>
+            <option value="300">5 minutes</option>
+            <option value="900">15 minutes</option>
+          </select>
+        </label>
+        {#if nativeLock && !nativeLock.available}
+          <p class="muted">
+            This device has no biometric or screen-lock authentication, so the app lock is
+            unavailable.
+          </p>
+        {/if}
+        <p class="muted">
+          The app lock is a local convenience. It does not replace signing in to the server.
+        </p>
+      </section>
+    {/if}
 
     <section class="panel" aria-labelledby="credential-heading">
       <h2 id="credential-heading">Mail credential</h2>

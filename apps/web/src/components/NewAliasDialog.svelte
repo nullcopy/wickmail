@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Alias, ExpiryRequest } from "@wickmail/core";
+  import { untrack } from "svelte";
   import { session } from "../lib/session.svelte";
   import { aliasPath, router } from "../lib/router.svelte";
   import { LEASE_PRESETS } from "../lib/preferences";
@@ -10,9 +11,11 @@
   interface Props {
     onClose: () => void;
     onCreated?: (alias: Alias) => void;
+    /** Suggested label, for example from a shared link. */
+    initialLabel?: string;
   }
 
-  let { onClose, onCreated }: Props = $props();
+  let { onClose, onCreated, initialLabel = "" }: Props = $props();
 
   type Preset = "24h" | "7d" | "30d" | "custom" | "never";
 
@@ -24,7 +27,7 @@
     return "custom";
   }
 
-  let label = $state("");
+  let label = $state(untrack(() => initialLabel));
   let purpose = $state("");
   let preset = $state<Preset>(presetFor(session.preferences.defaultLeaseSeconds));
   let customExpiry = $state("");

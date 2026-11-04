@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type { Alias, AliasState, QuarantineResponse } from "@wickmail/core";
   import { session } from "../lib/session.svelte";
   import { aliasPath, router } from "../lib/router.svelte";
@@ -17,6 +18,7 @@
   import EmptyState from "../components/EmptyState.svelte";
   import StatusBadge from "../components/StatusBadge.svelte";
   import NewAliasDialog from "../components/NewAliasDialog.svelte";
+  import { SHARE_EVENT, suggestLabelFromShare } from "../lib/native";
 
   type ExpiryChoice = "any" | "none" | "24h" | "7d" | "range";
 
@@ -26,6 +28,7 @@
   let error = $state<unknown>(null);
   let truncated = $state(false);
   let showGenerate = $state(false);
+  let suggestedLabel = $state("");
   let now = $state(Date.now());
 
   let search = $state("");
@@ -56,6 +59,17 @@
 
   $effect(() => {
     void load();
+  });
+
+  // The Android shell forwards shared text here; open the create dialog with
+  // a suggested label.
+  onMount(() => {
+    const handler = (event: Event) => {
+      suggestedLabel = suggestLabelFromShare((event as CustomEvent<string>).detail ?? "");
+      showGenerate = true;
+    };
+    window.addEventListener(SHARE_EVENT, handler);
+    return () => window.removeEventListener(SHARE_EVENT, handler);
   });
 
   const expiryFilter = $derived<ExpiryFilter>(
@@ -250,5 +264,12 @@
 </section>
 
 {#if showGenerate}
-  <NewAliasDialog onClose={() => (showGenerate = false)} onCreated={load} />
+  <NewAliasDialog
+    initialLabel={suggestedLabel}
+    onClose={() => {
+      showGenerate = false;
+      suggestedLabel = "";
+    }}
+    onCreated={load}
+  />
 {/if}
