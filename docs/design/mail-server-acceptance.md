@@ -65,18 +65,21 @@ path.
 ## Observability
 
 `MailPath` exposes counters for policy failures, spool exhaustion, spool
-unavailability, forwarding failures, accepted messages, and delivered messages.
-The running server logs them alongside spool depth and age, which is the alert
-signal for spool exhaustion. A Prometheus endpoint and alert rules are tracked
-by #69 (M9.2 monitoring and alerting).
+unavailability, forwarding failures, accepted messages, delivered messages,
+reconciliation passes, reconciliation repairs, and reconciliation failures.
+Management authentication failures raise an alert. The running server logs the
+counters alongside spool depth and age, and `wickmail-monitor` evaluates them
+with disk usage, certificate expiry, and authentication-failure counts against
+configurable thresholds, alerting through journald and an optional webhook and
+writing Prometheus textfile metrics. See [docs/ops/monitoring.md](../ops/monitoring.md)
+and [`infra/monitoring/prometheus-alerts.yml`](../../infra/monitoring/prometheus-alerts.yml).
 
-## Out of scope for the walking skeleton
+## Operational verification
 
-These criteria from the design are operational and are tracked by later
-milestones:
+The operational criteria are covered by dedicated tests and guides:
 
-- Alias list filtering and sorting: #52.
-- Quotas, rate limits, and disk-full behavior at the API: #54, #72.
-- SPF, DKIM, DMARC, reverse DNS, and TLS deployment checks: #70.
-- Backup, restore, and reconciliation drills: #68.
-- Prometheus metrics and alert rules: #69.
+- Quotas, rate limits, and disk-full behavior: `nix/tests/abuse-controls.nix`.
+- SPF, DKIM, DMARC, reverse DNS, and TLS: [docs/ops/deliverability.md](../ops/deliverability.md).
+- Backup, restore, and reconciliation drill: `nix/tests/backup-restore.nix`.
+- Monitoring and alerting: [docs/ops/monitoring.md](../ops/monitoring.md).
+- Deployment and upgrades: [docs/ops/deployment.md](../ops/deployment.md).

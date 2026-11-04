@@ -1,0 +1,87 @@
+# Prometheus alert rules for Wickmail.
+#
+# Load alongside a node-exporter textfile collector that scrapes the file
+# written by `services.wickmail.monitoring.textfile`.
+groups:
+  - name: wickmail
+    rules:
+      - alert: WickmailSpoolBacklog
+        expr: wickmail_spool_depth > 1000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Wickmail spool depth is {{ $value }}"
+          description: "Messages are not being forwarded to Dovecot fast enough."
+
+      - alert: WickmailSpoolStalled
+        expr: wickmail_spool_oldest_age_seconds > 3600
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Oldest spooled message is {{ $value }}s old"
+          description: "The LMTP forwarder is stuck; check wickmail.service and Dovecot."
+
+      - alert: WickmailDiskNearlyFull
+        expr: wickmail_disk_used_percent > 90
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Wickmail disk usage is {{ $value }}%"
+          description: "Free space before the spool returns temporary failures."
+
+      - alert: WickmailCertificateExpiring
+        expr: wickmail_certificate_days_remaining < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate expires in {{ $value }} days"
+          description: "Renew the certificate before it expires."
+
+      - alert: WickmailAuthenticationFailures
+        expr: increase(wickmail_auth_failures[1h]) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Repeated management authentication failures"
+          description: "Possible brute-force attempt; review the source and rotate credentials."
+
+      - alert: WickmailPolicyFailures
+        expr: increase(wickmail_policy_failures[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Delivery policy or database failures"
+          description: "Mail is being deferred with a temporary failure; check the database and wickmail.service."
+
+      - alert: WickmailSpoolFailures
+        expr: increase(wickmail_spool_full_total[15m]) + increase(wickmail_spool_unavailable_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The durable spool rejected mail"
+          description: "Free disk space or raise maxSpoolEntries; accepted mail is never silently dropped."
+
+      - alert: WickmailReconciliationFailures
+        expr: increase(wickmail_reconciliation_failures_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Quarantine reconciliation failed"
+          description: "Check the mail store and the wickmail.service journal."
+
+      - alert: WickmailReconciliationRepairs
+        expr: increase(wickmail_reconciliation_repairs_total[1h]) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Quarantine reconciliation repaired a store"
+          description: "Expected after a restore; investigate otherwise."

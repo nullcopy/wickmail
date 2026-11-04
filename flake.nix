@@ -356,7 +356,7 @@
                   nativeBuildInputs = [ pkgs.nixfmt ];
                 }
                 ''
-                  nixfmt --check ${./flake.nix} ${./nix/modules/default.nix} ${./nix/tests/mail-path.nix}
+                  nixfmt --check ${./flake.nix} ${./nix/modules/default.nix} ${./nix/tests/mail-path.nix} ${./nix/tests/backup-restore.nix} ${./nix/tests/abuse-controls.nix}
                   touch $out
                 '';
           }
@@ -449,6 +449,14 @@
           value.checks
           // lib.optionalAttrs (system == "x86_64-linux") {
             mail-path = import ./nix/tests/mail-path.nix {
+              pkgs = import nixpkgs { inherit system; };
+              wickmailModule = self.nixosModules.default;
+            };
+            backup-restore = import ./nix/tests/backup-restore.nix {
+              pkgs = import nixpkgs { inherit system; };
+              wickmailModule = self.nixosModules.default;
+            };
+            abuse-controls = import ./nix/tests/abuse-controls.nix {
               pkgs = import nixpkgs { inherit system; };
               wickmailModule = self.nixosModules.default;
             };

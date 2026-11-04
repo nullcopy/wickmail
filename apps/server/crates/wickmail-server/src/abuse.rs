@@ -167,6 +167,8 @@ pub enum AlertKind {
     RateLimited,
     /// The durable spool rejected a message.
     SpoolFailure,
+    /// A management or mail authentication attempt failed.
+    AuthenticationFailure,
 }
 
 impl AlertKind {
@@ -177,6 +179,7 @@ impl AlertKind {
             AlertKind::QuotaExceeded => "quota_exceeded",
             AlertKind::RateLimited => "rate_limited",
             AlertKind::SpoolFailure => "spool_failure",
+            AlertKind::AuthenticationFailure => "authentication_failure",
         }
     }
 }
