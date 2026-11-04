@@ -22,6 +22,22 @@ wickmail/
 
 Wickmail is built, tested, and deployed through a Nix flake. Development uses `nix develop`, checks run with `nix flake check`, and deployment uses the flake's NixOS modules and packages. See [ADR 0011](docs/decisions/0011-nix-flake-first-class.md).
 
+## Development
+
+Install [Nix](https://nixos.org/download/) with flakes enabled, then enter the development shell:
+
+```sh
+nix develop
+```
+
+The shell provides Node.js 22 with npm, Prettier, ESLint, and the utilities used by the build and tests. Common commands run inside the shell:
+
+```sh
+npm run format        # format the repository with Prettier
+npm run lint          # lint with ESLint
+nix flake check       # run the formatting and lint checks
+```
+
 ## Documentation
 
 - [Design overview](docs/design/overview.md)

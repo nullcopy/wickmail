@@ -1,0 +1,11 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+result
+result-*
+
+# Lock files
+flake.lock
+package-lock.json
