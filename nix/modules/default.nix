@@ -166,9 +166,9 @@ in
     systemd.tmpfiles.rules = [
       "d /run/wickmail 0755 root root -"
       "d ${cfg.mailRoot} 0750 ${cfg.mailUser} ${cfg.mailGroup} -"
+      "d ${cfg.mailRoot}/sieve-bin 0750 ${cfg.mailUser} ${cfg.mailGroup} -"
       "d ${cfg.stateDir} 0750 ${cfg.user} ${cfg.group} -"
       "d ${cfg.stateDir}/spool 0750 ${cfg.user} ${cfg.group} -"
-      "d ${cfg.stateDir}/sieve-bin 0750 ${cfg.mailUser} ${cfg.mailGroup} -"
     ];
 
     environment.etc."dovecot/sieve/before/global.sieve".source = globalSieve;
@@ -228,13 +228,15 @@ in
         type = "before";
         driver = "file";
         path = "/etc/dovecot/sieve/before/";
-        bin_path = "${cfg.stateDir}/sieve-bin";
+        bin_path = "${cfg.mailRoot}/sieve-bin";
       };
 
       service = [
         {
           _section.name = "lmtp";
-          "unix_listener /run/dovecot2/lmtp" = {
+          # The default LMTP listener resolves to /run/dovecot2/lmtp; set its
+          # mode so the proxy can connect without duplicating the listener.
+          "unix_listener lmtp" = {
             mode = "0666";
           };
         }
