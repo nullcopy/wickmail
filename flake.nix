@@ -74,11 +74,40 @@
           eslint .
           touch "$out"
         '';
+
+        # Evaluate the NixOS module against a sample configuration. This
+        # resolves Postfix, Rspamd, and Dovecot settings without building the
+        # full mail stack.
+        nixos-modules =
+          let
+            evaluated = nixpkgs.lib.nixosSystem {
+              system = pkgs.stdenv.hostPlatform.system;
+              modules = [
+                self.nixosModules.default
+                ./infra/nixos/test-configuration.nix
+              ];
+            };
+            mail = evaluated.config.services.wickmail.mail;
+          in
+          pkgs.runCommand "wickmail-nixos-module-eval" { } ''
+            cat > $out <<EOF
+            domain=${mail.domain}
+            virtual_transport=${evaluated.config.services.postfix.settings.main.virtual_transport}
+            postfix=${toString evaluated.config.services.postfix.enable}
+            rspamd=${toString evaluated.config.services.rspamd.enable}
+            dovecot=${toString evaluated.config.services.dovecot2.enable}
+            policy_socket=${mail.policySocket}
+            lmtp_socket=${mail.lmtpSocket}
+            EOF
+          '';
       });
 
       # Convenience runners are added as tasks are defined.
       apps = forAllSystems (_pkgs: { });
 
-      nixosModules.default = _: { };
+      nixosModules = {
+        default = import ./infra/nixos/wickmail-mail.nix;
+        wickmail-mail = import ./infra/nixos/wickmail-mail.nix;
+      };
     };
 }
