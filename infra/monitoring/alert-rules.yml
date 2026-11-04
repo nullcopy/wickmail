@@ -1,0 +1,141 @@
+# Prometheus alerting rules for Wickmail.
+#
+# Load with a Prometheus `rule_files` entry pointing at this file. Every rule
+# reads a `wickmail_*` metric exposed by the management API's `/metrics`
+# endpoint; see docs/operations/monitoring.md for the metric catalogue and the
+# scrape configuration.
+groups:
+  - name: wickmail-mail-path
+    rules:
+      - alert: WickmailSmtpQueueDepthHigh
+        expr: wickmail_smtp_queue_depth > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Postfix queue depth is high ({{ $value }} messages)
+          description: >-
+            The Postfix queue has stayed above 100 messages for 15 minutes.
+            Inbound or outbound delivery is not draining.
+
+      - alert: WickmailSpoolDepthHigh
+        expr: wickmail_spool_depth > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Wickmail spool depth is high ({{ $value }} messages)
+          description: >-
+            More than 100 accepted messages are waiting for Dovecot. Check the
+            downstream LMTP target and the spool worker.
+
+      - alert: WickmailSpoolOldestMessageStuck
+        expr: wickmail_spool_oldest_age_seconds > 3600
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Oldest spooled message is over an hour old
+          description: >-
+            A message has been in the spool for more than an hour. Accepted
+            mail is not being delivered and may eventually bounce at the sender.
+
+      - alert: WickmailSpoolFullAlerts
+        expr: increase(wickmail_alerts_total{kind="disk_full"}[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: The mail filesystem is full
+          description: >-
+            The server returned temporary failures because the spool filesystem
+            is full. Accepted mail is deferred, never dropped, but senders will
+            see retries.
+
+  - name: wickmail-capacity
+    rules:
+      - alert: WickmailDiskSpaceLow
+        expr: wickmail_disk_free_ratio < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mail filesystem free space is below 10%
+          description: >-
+            Free space on {{ $labels.path }} is {{ $value | humanizePercentage }}.
+            Below the floor the server returns temporary failures.
+
+      - alert: WickmailDiskBelowFloor
+        expr: wickmail_disk_ok == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Mail filesystem is below the configured free-space floor
+          description: >-
+            Free space on {{ $labels.path }} is below
+            `services.wickmail.mail`'s floor. Deliveries are being deferred.
+
+      - alert: WickmailCertificateExpiringSoon
+        expr: wickmail_certificate_expiry_days < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: TLS certificate for {{ $labels.path }} expires in {{ $value }} days
+          description: Renew the certificate and reload Postfix and Dovecot.
+
+  - name: wickmail-security
+    rules:
+      - alert: WickmailAuthenticationFailures
+        expr: increase(wickmail_auth_failures_total[5m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Elevated management authentication failures
+          description: >-
+            More than 20 failed management authentication attempts in 5
+            minutes. Check for credential stuffing or a misconfigured client.
+
+      - alert: WickmailRecipientRejections
+        expr: increase(wickmail_recipient_rejections_total[10m]) > 500
+        labels:
+          severity: info
+        annotations:
+          summary: High recipient rejection rate
+          description: >-
+            Many RCPT attempts were rejected as unknown or disabled. This is
+            expected for dictionary attacks; investigate if unexpected.
+
+  - name: wickmail-reliability
+    rules:
+      - alert: WickmailPolicyServiceFailures
+        expr: increase(wickmail_policy_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Recipient policy evaluations are failing
+          description: >-
+            The policy interface failed at stage {{ $labels.stage }}. Postfix
+            defers rather than rejecting, so mail is delayed, not lost.
+
+      - alert: WickmailOutboundRateLimited
+        expr: increase(wickmail_outbound_tempfailed_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Outbound submissions were rate limited
+          description: >-
+            An outbound submission hit the rate limit ({{ $labels.reason }}).
+            Expected under load; investigate if sustained.
+
+      - alert: WickmailReconciliationRepairs
+        expr: increase(wickmail_reconciliation_messages_total{result=~"requarantined|rebuilt|deleted"}[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Reconciliation repaired quarantine state
+          description: >-
+            Reconciliation changed {{ $value }} messages ({{ $labels.result }})
+            in the last hour. Frequent repairs suggest a crash or a manual
+            change to the mail store.

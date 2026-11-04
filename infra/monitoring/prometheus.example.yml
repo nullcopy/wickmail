@@ -1,0 +1,31 @@
+# Example Prometheus configuration for scraping Wickmail.
+#
+# The management API exposes `/metrics` on the same listener as the management
+# API. Bind that listener to a private interface, or set
+# `services.wickmail.metrics.token` so the endpoint requires a bearer token.
+#
+# Alert rules live in infra/monitoring/alert-rules.yml; point `rule_files` at a
+# copy of it on the Prometheus host.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/wickmail-alert-rules.yml
+
+scrape_configs:
+  - job_name: wickmail
+    metrics_path: /metrics
+    scheme: http
+    # When a bearer token is configured, uncomment and set it:
+    # authorization:
+    #   credentials_file: /etc/prometheus/wickmail-metrics-token
+    static_configs:
+      - targets: ["127.0.0.1:8080"]
+
+  # Optional: a node exporter textfile collector for host metrics. The
+  # collect-postfix-queue.sh script writes a `wickmail_postfix_queue_depth`
+  # gauge here for hosts where the server cannot run `postqueue` itself.
+  - job_name: node
+    static_configs:
+      - targets: ["127.0.0.1:9100"]

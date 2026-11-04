@@ -19,6 +19,10 @@ export interface QuarantineServiceOptions {
   faults?: FaultInjector;
   /** The default interval for periodic reconciliation and retention. */
   maintenanceIntervalMs?: number;
+  /** Observes every reconciliation pass, for monitoring. */
+  onReconciliation?: (report: ReconciliationReport) => void;
+  /** Observes every retention pass, for monitoring. */
+  onRetention?: (report: RetentionReport) => void;
 }
 
 /** The result of one maintenance tick. */
@@ -48,6 +52,8 @@ export class QuarantineService {
   private readonly store: MutableMailStore;
   private readonly now: () => number;
   private readonly maintenanceIntervalMs: number;
+  private readonly onReconciliation: ((report: ReconciliationReport) => void) | undefined;
+  private readonly onRetention: ((report: RetentionReport) => void) | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(options: QuarantineServiceOptions) {
@@ -56,6 +62,8 @@ export class QuarantineService {
     this.now = options.now ?? Date.now;
     this.policy = options.policy ?? defaultQuarantineRetentionPolicy();
     this.maintenanceIntervalMs = options.maintenanceIntervalMs ?? DEFAULT_MAINTENANCE_INTERVAL_MS;
+    this.onReconciliation = options.onReconciliation;
+    this.onRetention = options.onRetention;
 
     this.reconciler = new QuarantineReconciler({
       db: options.db,
@@ -85,8 +93,10 @@ export class QuarantineService {
   }
 
   /** Reconcile the metadata with the mail store. */
-  reconcile(): Promise<ReconciliationReport> {
-    return this.reconciler.runOnce();
+  async reconcile(): Promise<ReconciliationReport> {
+    const report = await this.reconciler.runOnce();
+    this.onReconciliation?.(report);
+    return report;
   }
 
   /** Recover a quarantined message, repairing state first. */
@@ -104,13 +114,20 @@ export class QuarantineService {
   /** Run retention, repairing state first. */
   async runRetention(): Promise<RetentionReport> {
     await this.reconcile();
-    return this.retention.runOnce();
+    return this.runRetentionOnly();
+  }
+
+  /** Run retention without a preceding reconciliation pass. */
+  private async runRetentionOnly(): Promise<RetentionReport> {
+    const report = await this.retention.runOnce();
+    this.onRetention?.(report);
+    return report;
   }
 
   /** One maintenance tick: reconcile, then run retention. */
   async tick(): Promise<MaintenanceReport> {
     const reconciliation = await this.reconcile();
-    const retention = await this.retention.runOnce();
+    const retention = await this.runRetentionOnly();
     return { reconciliation, retention };
   }
 

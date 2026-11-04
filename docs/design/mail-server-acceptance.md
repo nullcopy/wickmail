@@ -56,18 +56,23 @@ Tests live under `apps/server/test/`. Run them with `nix develop -c npm test`.
 - **Alerts and metrics on spool exhaustion.** The server reports spool exhaustion
   as a distinct `SpoolFullError` and defers at LMTP with a `451`, and
   `Spool.stats(now)` exposes queue depth and oldest age for monitoring
-  (`spool.test.ts`). The alert rule and scrape target are operational hardening,
-  tracked by M9.2 ([#69](https://github.com/nullcopy/wickmail/issues/69)).
+  (`spool.test.ts`). M9.2 ([#69](https://github.com/nullcopy/wickmail/issues/69))
+  now exposes these through the `/metrics` endpoint and the alert rules in
+  [monitoring](../operations/monitoring.md); `metrics.test.ts` covers them.
 - **Postfix, Rspamd, and Dovecot wiring.** `nixos-module.test.ts` asserts the
   NixOS module wires the RCPT socketmap lookup, LMTP virtual transport, Rspamd,
   and the isolated quarantine namespace, and `nix flake check` evaluates the
   module against `infra/nixos/test-configuration.nix`. Full end-to-end delivery
-  against a running stack is a deployment check, tracked by M9.4
-  ([#71](https://github.com/nullcopy/wickmail/issues/71)).
+  against a running stack is the deployment check in
+  [deployment](../operations/deployment.md) (M9.4,
+  [#71](https://github.com/nullcopy/wickmail/issues/71)).
 - **Alias list filtering and sorting.** Criterion 3 needs the management query
   API, which lands in M6 ([#52](https://github.com/nullcopy/wickmail/issues/52)).
 - **Reliability and security controls** (SPF, DKIM, DMARC, reverse DNS, TLS,
-  backups, rate limits, certificate monitoring) are operational hardening,
-  tracked by M9 ([#68](https://github.com/nullcopy/wickmail/issues/68),
-  [#70](https://github.com/nullcopy/wickmail/issues/70),
-  [#72](https://github.com/nullcopy/wickmail/issues/72)).
+  backups, rate limits, certificate monitoring) are implemented and documented
+  under [operations](../operations/README.md): backups and the drill (M9.1,
+  [#68](https://github.com/nullcopy/wickmail/issues/68)), monitoring (M9.2,
+  [#69](https://github.com/nullcopy/wickmail/issues/69)), deliverability (M9.3,
+  [#70](https://github.com/nullcopy/wickmail/issues/70)), and abuse controls
+  (M9.5, [#72](https://github.com/nullcopy/wickmail/issues/72)). External
+  test-account placement remains an operator step.

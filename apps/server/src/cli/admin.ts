@@ -15,6 +15,9 @@ import {
 import { rotateMailCredential, revokeMailCredential } from "../auth/mailCredential.js";
 import { randomToken } from "../auth/tokens.js";
 import type { SqliteDatabase } from "../db/database.js";
+import { FileMailStore } from "../mailstore/filesystem.js";
+import { QuarantineReconciler } from "../quarantine/reconciliation.js";
+import { defaultQuarantineRetentionPolicy } from "../quarantine/types.js";
 
 /** Output sinks for the admin CLI. */
 export interface AdminCliIo {
@@ -31,6 +34,8 @@ export interface AdminCliDeps {
   passwordHasher?: PasswordHasher;
   /** The default username used by `bootstrap`. */
   defaultUsername?: string;
+  /** The mail-store root, required by `reconcile`. */
+  mailStoreDirectory?: string;
 }
 
 interface ParsedArgs {
@@ -71,6 +76,7 @@ const USAGE = [
   "  token list",
   "  token revoke --id <id>",
   "  user",
+  "  reconcile",
 ].join("\n");
 
 function requireUser(deps: AdminCliDeps, io: AdminCliIo): UserRow | undefined {
@@ -258,6 +264,24 @@ export async function runAdminCli(
         io.out(`username: ${user.username}`);
         io.out(`password set: ${user.passwordHash !== null}`);
         io.out(`recovery codes remaining: ${countUnusedRecoveryCodes(deps.db, user.id)}`);
+        return 0;
+      }
+
+      case "reconcile": {
+        const directory = deps.mailStoreDirectory;
+        if (directory === undefined || directory.length === 0) {
+          io.err("reconcile requires a mail store directory (set WICKMAIL_MAIL_DIR)");
+          return 2;
+        }
+        const store = new FileMailStore({ directory });
+        const reconciler = new QuarantineReconciler({
+          db: deps.db,
+          store,
+          policy: defaultQuarantineRetentionPolicy(),
+          now: deps.now ?? Date.now,
+        });
+        const report = await reconciler.runOnce();
+        io.out(JSON.stringify(report));
         return 0;
       }
 

@@ -3,6 +3,7 @@ import type { SlidingWindowRateLimiter } from "../abuse/rateLimit.js";
 import { recordAuditEvent } from "../audit/events.js";
 import type { SqliteDatabase } from "../db/database.js";
 import type { MailStoreAdapter } from "../mailstore/adapter.js";
+import type { MetricsRegistry } from "../metrics/registry.js";
 import { getReplyContext } from "./context.js";
 import type { DkimSigner } from "./dkim.js";
 import { composeReply } from "./outbound.js";
@@ -28,6 +29,8 @@ export interface ReplyClientDeps {
   rateLimiter?: SlidingWindowRateLimiter;
   /** Outbound submissions per minute. Required for rate limiting to apply. */
   outboundPerMinute?: number;
+  /** Where metrics are recorded. Metrics are skipped when absent. */
+  metrics?: MetricsRegistry;
 }
 
 type IdentityResolution = { ok: true; identity: ReplyIdentity } | { ok: false; reason: string };
@@ -120,6 +123,7 @@ export class ReplyClient {
         ...(this.deps.outboundPerMinute !== undefined
           ? { outboundPerMinute: this.deps.outboundPerMinute }
           : {}),
+        ...(this.deps.metrics !== undefined ? { metrics: this.deps.metrics } : {}),
       },
       {
         identity: resolution.identity,

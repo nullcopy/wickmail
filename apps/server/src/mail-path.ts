@@ -8,7 +8,13 @@ import type { SqliteDatabase } from "./db/database.js";
 import type { DeliveryTarget } from "./delivery/target.js";
 import { MailProxy, type InboundRateLimits } from "./lmtp/proxy.js";
 import { createLmtpServer } from "./lmtp/server.js";
-import { createRecipientPolicy, type RecipientPolicy } from "./policy/recipient.js";
+import { METRIC } from "./metrics/names.js";
+import type { MetricsRegistry } from "./metrics/registry.js";
+import {
+  createRecipientPolicy,
+  type RecipientDecision,
+  type RecipientPolicy,
+} from "./policy/recipient.js";
 import { createSocketmapServer } from "./policy/socketmap.js";
 import { FileSpool } from "./spool/file-spool.js";
 import { SpoolWorker } from "./spool/worker.js";
@@ -40,6 +46,8 @@ export interface MailPathOptions {
   rateLimits?: InboundRateLimits;
   /** Where operational alerts go. */
   alerts?: AlertSink;
+  /** Where metrics are recorded. Metrics are skipped when absent. */
+  metrics?: MetricsRegistry;
 }
 
 /**
@@ -67,6 +75,7 @@ export class MailPath {
       ...(options.rateLimiter !== undefined ? { rateLimiter: options.rateLimiter } : {}),
       ...(options.rateLimits !== undefined ? { rateLimits: options.rateLimits } : {}),
       ...(options.alerts !== undefined ? { alerts: options.alerts } : {}),
+      ...(options.metrics !== undefined ? { metrics: options.metrics } : {}),
     });
     this.worker = new SpoolWorker(this.spool, options.target, {
       ...(options.now !== undefined ? { now: options.now } : {}),
@@ -78,7 +87,11 @@ export class MailPath {
     });
     this.socketmap = createSocketmapServer({
       mapName: "recipient",
-      evaluate: (key) => this.recipientPolicy.evaluate(key, (options.now ?? Date.now)()),
+      evaluate: (key) => {
+        const decision = this.recipientPolicy.evaluate(key, (options.now ?? Date.now)());
+        this.observeRecipientDecision(decision);
+        return decision;
+      },
     });
     this.lmtp = createLmtpServer({
       proxy: this.proxy,
@@ -87,6 +100,26 @@ export class MailPath {
       ...(config.maxMessageBytes !== undefined ? { maxMessageBytes: config.maxMessageBytes } : {}),
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
+  }
+
+  /** Record the RCPT decision for monitoring. */
+  private observeRecipientDecision(decision: RecipientDecision): void {
+    if (this.options.metrics === undefined) {
+      return;
+    }
+    if (decision.outcome === "tempfail") {
+      this.options.metrics.increment(
+        METRIC.policyFailuresTotal.name,
+        METRIC.policyFailuresTotal.help,
+        { stage: "rcpt" },
+      );
+    } else if (decision.outcome === "reject") {
+      this.options.metrics.increment(
+        METRIC.recipientRejectionsTotal.name,
+        METRIC.recipientRejectionsTotal.help,
+        { reason: decision.reason },
+      );
+    }
   }
 
   /** Bind the policy socketmap server. */

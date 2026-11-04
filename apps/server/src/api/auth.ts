@@ -57,6 +57,7 @@ import {
 } from "../auth/users.js";
 import { defaultAbuseLimits } from "../abuse/limits.js";
 import { SlidingWindowRateLimiter } from "../abuse/rateLimit.js";
+import { METRIC } from "../metrics/names.js";
 import { toIsoTimestamp } from "../time.js";
 import { SESSION_COOKIE, requireCsrf, requireSessionPrincipal } from "./context.js";
 import type { ApiDeps } from "./deps.js";
@@ -67,6 +68,11 @@ const AUTH_RATE_WINDOW_MS = 60_000;
 
 function now(deps: ApiDeps): number {
   return (deps.now ?? Date.now)();
+}
+
+/** Record a failed authentication attempt for monitoring. */
+function countAuthFailure(deps: ApiDeps, method: string): void {
+  deps.metrics?.increment(METRIC.authFailuresTotal.name, METRIC.authFailuresTotal.help, { method });
 }
 
 function hasherFor(deps: ApiDeps): PasswordHasher {
@@ -151,6 +157,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: ApiDeps): void {
       AUTH_RATE_WINDOW_MS,
     );
     if (!result.allowed) {
+      countAuthFailure(deps, "rate_limit");
       throw rateLimited(result.retryAfterMs);
     }
   }
@@ -182,6 +189,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: ApiDeps): void {
     const body = setupRequestSchema.parse(request.body ?? {});
     const consumed = consumeSetupToken(deps.db, body.token, now(deps));
     if (consumed === undefined) {
+      countAuthFailure(deps, "setup");
       throw unauthorized("setup token is invalid, expired, or already used");
     }
     let user = getUserById(deps.db, consumed.userId);
@@ -210,10 +218,12 @@ export function registerAuthRoutes(app: FastifyInstance, deps: ApiDeps): void {
     const body = loginRequestSchema.parse(request.body ?? {});
     const user = getUserByUsername(deps.db, body.username);
     if (user === undefined || user.passwordHash === null) {
+      countAuthFailure(deps, "password");
       throw unauthorized("invalid username or password");
     }
     const valid = await hasherFor(deps).verify(user.passwordHash, body.password);
     if (!valid) {
+      countAuthFailure(deps, "password");
       throw unauthorized("invalid username or password");
     }
     reply.status(200).send(authenticate(deps, user, request, reply));
@@ -250,6 +260,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: ApiDeps): void {
     }
     const valid = await hasherFor(deps).verify(user.passwordHash, body.currentPassword);
     if (!valid) {
+      countAuthFailure(deps, "password_change");
       throw forbidden("current password is incorrect");
     }
     const at = now(deps);
@@ -264,6 +275,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: ApiDeps): void {
     const body = recoverAccountRequestSchema.parse(request.body ?? {});
     const consumed = consumeRecoveryCode(deps.db, body.code, now(deps));
     if (consumed === undefined) {
+      countAuthFailure(deps, "recovery");
       throw unauthorized("recovery code is invalid or already used");
     }
     const user = getUserById(deps.db, consumed.userId);
@@ -425,6 +437,7 @@ export function registerAuthRoutes(app: FastifyInstance, deps: ApiDeps): void {
       now(deps),
     );
     if (result === undefined) {
+      countAuthFailure(deps, "passkey");
       throw unauthorized("passkey authentication failed");
     }
     const user = getUserById(deps.db, result.userId);

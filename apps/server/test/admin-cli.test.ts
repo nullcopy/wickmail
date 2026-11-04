@@ -6,7 +6,7 @@ import { getSoleUser } from "../src/auth/users.js";
 import { runAdminCli, type AdminCliIo } from "../src/cli/admin.js";
 import type { SqliteDatabase } from "../src/db/database.js";
 import { fastPasswordHasher } from "./api-helpers.js";
-import { createTestDatabase, NOW } from "./helpers.js";
+import { createTempDirectory, createTestDatabase, NOW, removeTempDirectory } from "./helpers.js";
 
 let db: SqliteDatabase | undefined;
 
@@ -121,5 +121,27 @@ describe("admin CLI", () => {
       ),
     ).toBe(1);
     expect(create.err.join("\n")).toContain("unknown scope");
+  });
+
+  it("reconciles the quarantine metadata with the mail store", async () => {
+    db = createTestDatabase();
+    const directory = createTempDirectory();
+    try {
+      const missing = collector();
+      expect(await runAdminCli(["reconcile"], deps(db), missing.io)).toBe(2);
+      expect(missing.err.join("\n")).toContain("mail store directory");
+
+      const reconciled = collector();
+      const code = await runAdminCli(
+        ["reconcile"],
+        { ...deps(db), mailStoreDirectory: directory },
+        reconciled.io,
+      );
+      expect(code).toBe(0);
+      const report = JSON.parse(reconciled.out.join("\n")) as { scanned: number };
+      expect(report.scanned).toBe(0);
+    } finally {
+      removeTempDirectory(directory);
+    }
   });
 });

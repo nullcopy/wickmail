@@ -15,6 +15,8 @@ import {
 import { chooseRoute } from "../mail/route.js";
 import { isSpam } from "../mail/spam.js";
 import { uuidv7 } from "../mail/uuidv7.js";
+import { METRIC } from "../metrics/names.js";
+import type { MetricsRegistry } from "../metrics/registry.js";
 import { recordInboundAcceptance } from "../provenance/repository.js";
 import { SpoolFullError, type Spool } from "../spool/types.js";
 import { toIsoTimestamp } from "../time.js";
@@ -72,6 +74,8 @@ export interface MailProxyOptions {
   rateLimits?: InboundRateLimits;
   /** Where operational alerts go. Defaults to discarding them. */
   alerts?: AlertSink;
+  /** Where metrics are recorded. Metrics are skipped when absent. */
+  metrics?: MetricsRegistry;
 }
 
 /**
@@ -88,6 +92,7 @@ export class MailProxy {
   private readonly now: () => number;
   private readonly generateMessageId: (now: number) => string;
   private readonly alerts: AlertSink;
+  private readonly metrics: MetricsRegistry | undefined;
 
   constructor(private readonly options: MailProxyOptions) {
     this.localDomains = new Set(options.localDomains.map((domain) => domain.trim().toLowerCase()));
@@ -97,6 +102,18 @@ export class MailProxy {
     this.now = options.now ?? Date.now;
     this.generateMessageId = options.generateMessageId ?? ((at) => uuidv7(at));
     this.alerts = options.alerts ?? noopAlertSink;
+    this.metrics = options.metrics;
+  }
+
+  /** Count a deferred message, by the stage that deferred it. */
+  private countTempfail(stage: string): void {
+    this.metrics?.increment(
+      METRIC.messagesTempfailedTotal.name,
+      METRIC.messagesTempfailedTotal.help,
+      {
+        stage,
+      },
+    );
   }
 
   /** Apply the inbound rate limits, returning a temporary-failure reason when exceeded. */
@@ -131,6 +148,7 @@ export class MailProxy {
 
     const rateLimited = this.checkRateLimits(input);
     if (rateLimited !== undefined) {
+      this.countTempfail("rate_limit");
       return { status: "tempfail", reason: rateLimited };
     }
 
@@ -157,12 +175,20 @@ export class MailProxy {
         }
       }
     } catch (error) {
+      this.metrics?.increment(METRIC.policyFailuresTotal.name, METRIC.policyFailuresTotal.help, {
+        stage: "delivery",
+      });
+      this.countTempfail("policy");
       return { status: "tempfail", reason: `recipient lookup failed: ${errorText(error)}` };
     }
 
     if (unresolved.length > 0) {
       // Postfix validated recipients before acceptance, so this is defensive.
       // Alias policy never yields a permanent rejection after acceptance.
+      this.metrics?.increment(METRIC.policyFailuresTotal.name, METRIC.policyFailuresTotal.help, {
+        stage: "delivery",
+      });
+      this.countTempfail("recipient");
       return { status: "tempfail", reason: `no local recipient for ${unresolved.join(", ")}` };
     }
 
@@ -199,6 +225,7 @@ export class MailProxy {
       if (error instanceof SpoolFullError) {
         alertDiskFull(this.alerts, receivedAt, { messageId });
       }
+      this.countTempfail("spool");
       return { status: "tempfail", reason: `spool unavailable: ${errorText(error)}` };
     }
 
@@ -212,8 +239,13 @@ export class MailProxy {
       });
     } catch (error) {
       await this.options.spool.remove(messageId).catch(() => {});
+      this.countTempfail("provenance");
       return { status: "tempfail", reason: `provenance write failed: ${errorText(error)}` };
     }
+
+    this.metrics?.increment(METRIC.messagesAcceptedTotal.name, METRIC.messagesAcceptedTotal.help, {
+      route,
+    });
 
     return {
       status: "accepted",

@@ -6,6 +6,8 @@ import { recordAuditEvent } from "../audit/events.js";
 import type { SqliteDatabase } from "../db/database.js";
 import { evaluateOutboundSubmission, type OutboundDecision } from "../lease/actions.js";
 import { uuidv7 } from "../mail/uuidv7.js";
+import { METRIC } from "../metrics/names.js";
+import type { MetricsRegistry } from "../metrics/registry.js";
 import type { DkimSigner } from "./dkim.js";
 import { enforceOutboundIdentity } from "./outbound.js";
 import type { OutboundQueue } from "./queue.js";
@@ -54,6 +56,8 @@ export interface OutboundSubmissionDeps {
   rateLimiter?: SlidingWindowRateLimiter;
   /** Outbound submissions per minute. Required for rate limiting to apply. */
   outboundPerMinute?: number;
+  /** Where metrics are recorded. Metrics are skipped when absent. */
+  metrics?: MetricsRegistry;
 }
 
 /** The rate-limit window for outbound submissions. */
@@ -95,6 +99,11 @@ export async function submitOutbound(
       OUTBOUND_RATE_WINDOW_MS,
     );
     if (!limited.allowed) {
+      deps.metrics?.increment(
+        METRIC.outboundTempfailedTotal.name,
+        METRIC.outboundTempfailedTotal.help,
+        { reason: "rate_limit" },
+      );
       return { status: "tempfail", reason: "outbound rate limit exceeded" };
     }
   }

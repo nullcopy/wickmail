@@ -1,0 +1,47 @@
+; Wickmail DNS records template.
+;
+; Replace example.com, mail.example.com, 203.0.113.10, and the DKIM public key
+; with host-specific values. These records are intentionally NOT in the flake;
+; see ADR 0011 and docs/operations/deliverability.md.
+;
+; The DKIM selector and public key are produced by Rspamd (or another signer) on
+; the mail host. The record below must match the key the outbound path signs
+; with, so DMARC alignment holds.
+
+$ORIGIN example.com.
+$TTL 3600
+
+; --- Mail host -------------------------------------------------------------
+; The host that accepts inbound SMTP and submits outbound mail.
+mail            IN A     203.0.113.10
+; Publish AAAA only if the host has working IPv6 and an rDNS entry for it.
+; mail          IN AAAA  2001:db8::10
+
+; --- SPF -------------------------------------------------------------------
+; Authorize only this host's MX to send for the domain. Soft-fail while
+; ramping up, then hard-fail once deliverability is verified.
+@               IN TXT   "v=spf1 mx -all"
+
+; --- DKIM ------------------------------------------------------------------
+; One TXT record per selector. `wickmail` is the suggested selector; it must
+; match the Rspamd dkim_selector and the key used to sign outbound mail.
+wickmail._domainkey IN TXT "v=DKIM1; k=rsa; p=<REPLACE_WITH_DKIM_PUBLIC_KEY>"
+
+; --- DMARC -----------------------------------------------------------------
+; Strict alignment for both SPF and DKIM. Start at p=none to collect reports,
+; then move to quarantine and finally reject.
+_dmarc          IN TXT   "v=DMARC1; p=quarantine; adkim=s; aspf=s; pct=100; rua=mailto:dmarc@example.com; ruf=mailto:dmarc@example.com; fo=1"
+
+; --- TLS reporting (optional but recommended) ------------------------------
+_smtp._tls      IN TXT   "v=TLSRPTv1; rua=mailto:tls@example.com"
+
+; --- MTA-STS (optional) ----------------------------------------------------
+; Enforce TLS for inbound mail by publishing a policy file at
+; https://mta-sts.example.com/.well-known/mta-sts.txt and this record.
+_mta-sts        IN TXT   "v=STSv1; id=REPLACE_WITH_POLICY_ID"
+; mta-sts       IN CNAME  example.com.
+
+; --- Reverse DNS (rDNS) ----------------------------------------------------
+; PTR records are set at the hosting provider, not in this zone. The PTR for
+; 203.0.113.10 must resolve to mail.example.com, and mail.example.com must
+; forward-resolve to 203.0.113.10. See docs/operations/deliverability.md.

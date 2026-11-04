@@ -7,6 +7,7 @@ import type { PasskeyConfig } from "../auth/passkeys.js";
 import type { AbuseLimits } from "../abuse/limits.js";
 import type { AlertSink } from "../abuse/disk.js";
 import type { SlidingWindowRateLimiter } from "../abuse/rateLimit.js";
+import type { MetricsRegistry } from "../metrics/registry.js";
 
 /** Configuration for the management API. */
 export interface ManagementApiConfig {
@@ -24,6 +25,11 @@ export interface ManagementApiConfig {
   limits?: AbuseLimits;
   /** WebAuthn relying-party configuration. Passkeys are disabled when absent. */
   passkeys?: PasskeyConfig;
+  /**
+   * A bearer token that guards `/metrics`. When absent the endpoint is open,
+   * which is only appropriate when it is bound to a private interface.
+   */
+  metricsToken?: string;
 }
 
 /** Dependencies shared by every management API route. */
@@ -41,4 +47,8 @@ export interface ApiDeps {
   rateLimiter?: SlidingWindowRateLimiter;
   /** Where operational alerts go. */
   alerts?: AlertSink;
+  /** Where metrics are recorded. The `/metrics` route is only served when set. */
+  metrics?: MetricsRegistry;
+  /** Refreshes the pull-based gauges immediately before `/metrics` renders. */
+  collectMetrics?: () => Promise<void>;
 }

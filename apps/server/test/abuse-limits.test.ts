@@ -15,6 +15,12 @@ import { listQuarantineEntries } from "../src/quarantine/repository.js";
 import { QuarantineService } from "../src/quarantine/service.js";
 import { defaultQuarantineRetentionPolicy } from "../src/quarantine/types.js";
 import { MailProxy } from "../src/lmtp/proxy.js";
+import { MetricsRegistry } from "../src/metrics/registry.js";
+import { METRIC } from "../src/metrics/names.js";
+import { createRecipientPolicy } from "../src/policy/recipient.js";
+import { composeReply } from "../src/reply/outbound.js";
+import { MemoryOutboundQueue } from "../src/reply/queue.js";
+import { submitOutbound } from "../src/reply/submission.js";
 import { SpoolFullError, type Spool } from "../src/spool/types.js";
 import type { SqliteDatabase } from "../src/db/database.js";
 import { createApiHarness, type ApiHarness } from "./api-helpers.js";
@@ -213,5 +219,92 @@ describe("mail-path abuse controls", () => {
       receivedAt: NOW,
     });
     expect(second.status).toBe("tempfail");
+  });
+});
+
+describe("open relay prevention", () => {
+  it("rejects a recipient outside the local domains at RCPT", () => {
+    db = createTestDatabase();
+    const policy = createRecipientPolicy({
+      db,
+      localDomains: ["example.com"],
+      primaryAddresses: ["me@example.com"],
+    });
+    expect(policy.evaluate("user@external.net", NOW).outcome).toBe("reject");
+    expect(policy.evaluate("me@example.com", NOW).outcome).toBe("accept");
+  });
+
+  it("never accepts an external recipient at delivery", async () => {
+    db = createTestDatabase();
+    const proxy = new MailProxy({
+      db,
+      spool: {
+        async enqueue() {},
+        async list() {
+          return [];
+        },
+        async get() {
+          return undefined;
+        },
+        async remove() {},
+        async recordAttempt() {},
+        async stats() {
+          return { depth: 0, oldestAgeMs: null };
+        },
+      },
+      localDomains: ["example.com"],
+      primaryAddresses: ["me@example.com"],
+      now: () => NOW,
+    });
+    const result = await proxy.deliver({
+      mailFrom: "sender@example.net",
+      rcptTo: ["victim@external.net"],
+      data: "Subject: relay\r\n\r\nbody",
+      receivedAt: NOW,
+    });
+    expect(result.status).toBe("tempfail");
+  });
+});
+
+describe("outbound abuse controls", () => {
+  it("rate limits outbound submissions and counts the deferral", async () => {
+    db = createTestDatabase();
+    const limiter = new SlidingWindowRateLimiter({ now: () => NOW });
+    const metrics = new MetricsRegistry();
+    const queue = new MemoryOutboundQueue();
+    const identity = { kind: "primary" as const, address: "me@example.com" };
+    const raw = composeReply({
+      identity,
+      to: "sender@example.net",
+      subject: "Hi",
+      body: "body",
+      now: NOW,
+      messageId: "<reply@example.com>",
+    });
+    const deps = {
+      db,
+      queue,
+      rateLimiter: limiter,
+      outboundPerMinute: 1,
+      primaryAddresses: ["me@example.com"],
+      metrics,
+    };
+
+    const first = await submitOutbound(deps, {
+      identity,
+      raw,
+      recipients: ["sender@example.net"],
+      now: NOW,
+    });
+    expect(first.status).toBe("queued");
+
+    const second = await submitOutbound(deps, {
+      identity,
+      raw,
+      recipients: ["sender@example.net"],
+      now: NOW,
+    });
+    expect(second.status).toBe("tempfail");
+    expect(metrics.get(METRIC.outboundTempfailedTotal.name, { reason: "rate_limit" })).toBe(1);
   });
 });

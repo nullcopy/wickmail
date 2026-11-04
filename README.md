@@ -46,6 +46,8 @@ nix flake check       # run the formatting and lint checks
 - [Mail server](docs/design/mail-server.md)
 - [Web management app](docs/design/web-app.md)
 - [Android WebView shell](docs/design/android.md)
+- [Operations](docs/operations/README.md)
+- [Release](docs/release/v0.1.0-notes.md)
 - [Architecture decision records](docs/decisions/README.md)
 
 ## License

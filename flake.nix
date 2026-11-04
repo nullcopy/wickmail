@@ -84,6 +84,7 @@
               system = pkgs.stdenv.hostPlatform.system;
               modules = [
                 self.nixosModules.default
+                self.nixosModules.wickmail-backup
                 ./infra/nixos/test-configuration.nix
               ];
             };
@@ -100,6 +101,23 @@
             lmtp_socket=${mail.lmtpSocket}
             EOF
           '';
+
+        # Parse-check the operational scripts. They are run on the host, not
+        # built here, so a syntax check is the cheap guard that CI can run.
+        backup-scripts =
+          pkgs.runCommand "wickmail-backup-scripts-check"
+            {
+              nativeBuildInputs = [ pkgs.bash ];
+            }
+            ''
+              cp -R ${source} source
+              chmod -R u+w source
+              cd source
+              for script in infra/scripts/*.sh; do
+                bash -n "$script"
+              done
+              touch "$out"
+            '';
       });
 
       # Convenience runners are added as tasks are defined.
@@ -108,6 +126,7 @@
       nixosModules = {
         default = import ./infra/nixos/wickmail-mail.nix;
         wickmail-mail = import ./infra/nixos/wickmail-mail.nix;
+        wickmail-backup = import ./infra/nixos/wickmail-backup.nix;
       };
     };
 }

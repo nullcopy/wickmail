@@ -14,3 +14,15 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - uses: DeterminateSystems/magic-nix-cache-action@v15
       - run: nix flake check --print-build-logs
+
+  test:
+    name: unit tests and typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+      - run: nix develop -c npm ci
+      - run: nix develop -c npm run typecheck
+      # Includes the backup -> restore -> reconciliation drill.
+      - run: nix develop -c npm test

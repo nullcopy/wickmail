@@ -57,6 +57,18 @@ in
       description = "Durable spool directory for accepted messages.";
     };
 
+    stateDirectory = mkOption {
+      type = types.path;
+      default = "/var/lib/wickmail";
+      description = "State directory holding the SQLite database.";
+    };
+
+    databasePath = mkOption {
+      type = types.str;
+      default = "${cfg.stateDirectory}/wickmail.db";
+      description = "SQLite database file that holds aliases, policy, and provenance.";
+    };
+
     mailDirectory = mkOption {
       type = types.path;
       default = "/var/vmail";
@@ -92,6 +104,37 @@ in
       type = types.path;
       default = ../../infra/dovecot/wickmail.sieve;
       description = "Global Sieve script that routes on X-Wickmail-Route.";
+    };
+
+    metrics = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Pass the metrics paths and token to the wickmail-server unit.";
+      };
+      diskPaths = mkOption {
+        type = types.listOf types.str;
+        default = [
+          cfg.spoolDirectory
+          cfg.mailDirectory
+          cfg.quarantineDirectory
+        ];
+        description = "Filesystem paths whose free space is reported on /metrics.";
+      };
+      certificatePaths = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = "PEM certificate paths whose expiry is reported on /metrics.";
+      };
+      tokenFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = ''
+          A systemd EnvironmentFile that sets WICKMAIL_METRICS_TOKEN, so the
+          /metrics endpoint requires a bearer token. Keep the file out of the
+          Nix store and readable only by the service.
+        '';
+      };
     };
 
     serverPackage = mkOption {
@@ -177,6 +220,21 @@ in
         StateDirectory = "wickmail";
         RuntimeDirectory = "wickmail";
         Restart = "on-failure";
+        Environment = [
+          "WICKMAIL_DB=${cfg.databasePath}"
+          "WICKMAIL_DOMAIN=${cfg.domain}"
+          "WICKMAIL_HOSTNAME=${cfg.hostname}"
+          "WICKMAIL_PRIMARY_ADDRESS=${lib.elemAt cfg.primaryAddresses 0}"
+          "WICKMAIL_MAIL_DIR=${cfg.mailDirectory}"
+          "WICKMAIL_SPOOL_DIR=${cfg.spoolDirectory}"
+          "WICKMAIL_POLICY_SOCKET=${cfg.policySocket}"
+          "WICKMAIL_LMTP_SOCKET=${cfg.lmtpSocket}"
+        ]
+        ++ lib.optionals cfg.metrics.enable [
+          "WICKMAIL_METRICS_DISK_PATHS=${lib.concatStringsSep ":" cfg.metrics.diskPaths}"
+          "WICKMAIL_METRICS_CERTIFICATE_PATHS=${lib.concatStringsSep ":" cfg.metrics.certificatePaths}"
+        ];
+        EnvironmentFile = mkIf (cfg.metrics.enable && cfg.metrics.tokenFile != null) cfg.metrics.tokenFile;
       };
     };
   };

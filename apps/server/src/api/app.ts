@@ -6,6 +6,7 @@ import { resolvePrincipal } from "./context.js";
 import type { ApiDeps } from "./deps.js";
 import { registerErrorHandling } from "./errors.js";
 import { registerMessageRoutes } from "./messages.js";
+import { registerMetricsRoute } from "./metrics.js";
 import { registerQuarantineRoutes } from "./quarantine.js";
 
 /** Options for {@link buildApi}. */
@@ -36,6 +37,7 @@ export async function buildApi(options: BuildApiOptions): Promise<FastifyInstanc
   registerAliasRoutes(app, options);
   registerQuarantineRoutes(app, options);
   registerMessageRoutes(app, options);
+  registerMetricsRoute(app, options);
 
   return app;
 }
