@@ -35,6 +35,8 @@ The shell provides Node.js 22 with npm, Prettier, ESLint, and the utilities used
 ```sh
 npm run format        # format the repository with Prettier
 npm run lint          # lint with ESLint
+npm test              # run the unit tests with Vitest
+npm run typecheck     # type-check every workspace
 nix flake check       # run the formatting and lint checks
 ```
 

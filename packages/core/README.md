@@ -13,4 +13,4 @@ Scope:
 
 See the [design overview](../../docs/design/overview.md) and [mail server design](../../docs/design/mail-server.md).
 
-Status: not implemented.
+Status: the alias, lease, message, provenance, and management API schemas are defined in `src/`. The package contains no lease evaluation or routing logic; the server computes effective state and clients consume it.
