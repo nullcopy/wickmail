@@ -16,7 +16,8 @@ use crate::alias::{AliasId, AliasState, DEFAULT_LEASE_SECONDS};
 use crate::api::{
     API_CONTRACT_VERSION, AliasEventResponse, AliasListResponse, AliasResponse, CreateAliasRequest,
     DurationRequest, EnableRequest, ErrorResponse, ExpiryRequest, ProvenanceResponse,
-    ReplyContextResponse, ReplyRequest, ReplyResponse, SetExpiryRequest, UpdateAliasRequest,
+    ReplyContextResponse, ReplyIdentityDecision, ReplyIdentityOption, ReplyIdentitySelection,
+    ReplyRequest, ReplyResponse, SetExpiryRequest, UpdateAliasRequest,
 };
 use crate::audit::{AuditDetail, AuditEvent, AuditEventId, AuditEventKind};
 use crate::message::{MessageId, Provenance};
@@ -123,18 +124,12 @@ pub fn fixtures() -> Vec<(&'static str, String)> {
         (
             "reply-request.json",
             pretty(&ReplyRequest {
-                alias_id: alias_id(),
+                alias_id: Some(alias_id()),
                 body: "Thanks, that works.".to_string(),
                 quoted_text: Some("> Original message".to_string()),
             }),
         ),
-        (
-            "reply-response.json",
-            pretty(&ReplyResponse {
-                queued: true,
-                message_id: message_id(),
-            }),
-        ),
+        ("reply-response.json", pretty(&reply_response())),
     ]
 }
 
@@ -182,13 +177,43 @@ fn alias_event() -> AliasEventResponse {
 fn reply_context() -> ReplyContextResponse {
     ReplyContextResponse {
         message_id: message_id(),
-        from: "store@example.com".to_string(),
-        subject: "Your order".to_string(),
+        from: Some("store@example.com".to_string()),
+        subject: Some("Your order".to_string()),
         text: "Your order shipped.".to_string(),
+        original_message_id: Some("<orig@example.com>".to_string()),
         provenance: ProvenanceResponse::from(Provenance {
             alias_ids: vec![alias_id()],
             primary_received: true,
         }),
+        identity: ReplyIdentityDecision {
+            selection: ReplyIdentitySelection::Default,
+            selected: Some(ReplyIdentityOption::Alias {
+                alias_id: alias_id(),
+                address: CanonicalAddress::parse("green.farm@example.com").unwrap(),
+            }),
+            options: vec![
+                ReplyIdentityOption::Alias {
+                    alias_id: alias_id(),
+                    address: CanonicalAddress::parse("green.farm@example.com").unwrap(),
+                },
+                ReplyIdentityOption::Primary {
+                    address: CanonicalAddress::parse("user@example.com").unwrap(),
+                },
+            ],
+        },
+    }
+}
+
+fn reply_response() -> ReplyResponse {
+    ReplyResponse {
+        queued: true,
+        message_id: message_id(),
+        identity: ReplyIdentityOption::Alias {
+            alias_id: alias_id(),
+            address: CanonicalAddress::parse("green.farm@example.com").unwrap(),
+        },
+        renewed: true,
+        expires_at: Some(at("2026-01-11T00:00:00Z")),
     }
 }
 

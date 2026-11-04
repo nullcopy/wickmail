@@ -18,13 +18,18 @@ pub mod lease;
 pub mod mail;
 pub mod message;
 pub mod quarantine;
+pub mod reply;
 pub mod service;
 pub mod timestamp;
 pub mod wordlist;
 
 pub use address::{AddressError, CanonicalAddress, Domain};
 pub use alias::{Alias, AliasId, AliasState, DEFAULT_LEASE_SECONDS};
-pub use api::{API_CONTRACT_VERSION, AliasResponse, CreateAliasRequest, ExpiryRequest};
+pub use api::{
+    API_CONTRACT_VERSION, AliasResponse, CreateAliasRequest, ExpiryRequest, ReplyContextResponse,
+    ReplyIdentityDecision, ReplyIdentityOption, ReplyIdentitySelection, ReplyRequest,
+    ReplyResponse,
+};
 pub use audit::{
     AUDIT_RETENTION, AuditDetail, AuditEvent, AuditEventId, AuditEventKind,
     DELIVERY_METADATA_RETENTION, derived_expired_event,
@@ -42,6 +47,10 @@ pub use quarantine::{
     NoFaults, QuarantineError, QuarantineKind, QuarantineManager, QuarantineMetadata,
     QuarantineStatus, ReconciliationReport, RetentionLimits, RetentionPolicy, RetentionReport,
     SPAM_RETENTION,
+};
+pub use reply::{
+    DkimSigner, FileOutboundQueue, OutboundMessage, OutboundMeta, OutboundQueue, ReplyClient,
+    ReplyError, compose_reply, fetch_reply_context, select_reply_identity, submit_outbound,
 };
 pub use service::{AliasService, CreateAlias, ExpiryChoice, OutboundOutcome, ServiceError};
 pub use timestamp::Timestamp;

@@ -14,9 +14,10 @@ pub mod runtime;
 pub mod socketmap;
 pub mod spool;
 pub mod store;
+pub mod submission;
 
 pub use delivery::{PlannedDelivery, plan};
-pub use headers::{MessageParts, WICKMAIL_HEADER_PREFIX};
+pub use headers::{MessageParts, WICKMAIL_HEADER_PREFIX, mailbox_addresses};
 pub use lmtp::{Envelope, LmtpClient, LmtpError, LmtpTarget, MessageHandler, RecipientReply};
 pub use policy::{PolicyDecision, PolicyError, RecipientKind, RecipientPolicy};
 pub use runtime::{MailPath, RuntimeError, ServerConfig, route_header_value, serve};
@@ -26,3 +27,4 @@ pub use store::{
     AdapterError, INBOX_MAILBOX, MailStoreAdapter, MailboxLocator, MessageSummary,
     QUARANTINE_MAILBOX, SPAM_MAILBOX,
 };
+pub use submission::{SUBMISSION_SOCKETMAP_NAME, SubmissionPolicy};
