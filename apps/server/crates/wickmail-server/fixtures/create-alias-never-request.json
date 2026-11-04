@@ -1,0 +1,8 @@
+{
+  "label": null,
+  "purpose": null,
+  "expiry": {
+    "mode": "never"
+  },
+  "renewOnOutbound": false
+}

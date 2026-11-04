@@ -1,0 +1,16 @@
+{
+  "id": "018f9b60-0000-7000-8000-000000000001",
+  "address": "green.farm@example.com",
+  "label": "Example Store",
+  "purpose": "order #1234",
+  "state": "active",
+  "createdAt": "2026-01-01T00:00:00Z",
+  "expiresAt": "2026-01-08T00:00:00Z",
+  "disabledAt": null,
+  "leaseSeconds": 604800,
+  "renewOnOutbound": true,
+  "lastInboundAt": "2026-01-03T12:00:00Z",
+  "lastUserActivityAt": "2026-01-04T00:00:00Z",
+  "lastUsedAt": "2026-01-04T00:00:00Z",
+  "policyVersion": 2
+}

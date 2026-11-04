@@ -1,0 +1,9 @@
+{
+  "label": "Example Store",
+  "purpose": "order #1234",
+  "expiry": {
+    "mode": "lease",
+    "seconds": 604800
+  },
+  "renewOnOutbound": true
+}
