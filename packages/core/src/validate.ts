@@ -524,6 +524,11 @@ export function parseTokenListResponse(value: unknown, path = "$"): TokenListRes
   return tokenListResponse(value, path);
 }
 
+/** Validates a single API token payload. */
+export function parseApiToken(value: unknown, path = "$"): ApiToken {
+  return apiToken(value, path);
+}
+
 /** Validates a quarantine payload. */
 export function parseQuarantineResponse(value: unknown, path = "$"): QuarantineResponse {
   return quarantineResponse(value, path);
