@@ -71,10 +71,38 @@ wickmail-server mail-store quarantine --maildir /var/vmail/Maildir \
   --quarantine-dir /var/vmail/quarantine/.Expired
 ```
 
-### Integration test
+### Operational options
 
-`nix flake check` runs `nix/tests/mail-path.nix`, a NixOS VM test that starts
-Postfix, Rspamd, Dovecot, and wickmail-server together and verifies active
-delivery to `Inbox`, expiry routing to `Aliases/Expired`, unknown and disabled
-rejection at RCPT, a temporary failure while the policy service is down, and
-stripping of spoofed `X-Wickmail-*` headers.
+| Option | Purpose |
+|---|---|
+| `services.wickmail.dkimKeyFile` / `dkimSelector` | DKIM-sign outbound replies, aligned for DMARC |
+| `services.wickmail.tls.certificateFile` / `tls.keyFile` | TLS for Postfix and Dovecot |
+| `services.wickmail.maxMessageBytes`, `perSenderRate`, `globalRate` | Inbound abuse limits |
+| `services.wickmail.perAliasQuarantineCount` / `perAliasQuarantineBytes` | Quarantine quotas |
+| `services.wickmail.outboundRateLimit` | Postfix submission rate limit |
+| `services.wickmail.backup.*` | Scheduled backups (`wickmail-backup.timer`) |
+| `services.wickmail.monitoring.*` | Health checks and alerts (`wickmail-monitor.timer`) |
+
+### Operational scripts
+
+`wickmail-backup` archives the alias database (via `sqlite3 .backup`), the
+spool, the outbound queue, the mail store, and a configuration directory.
+`wickmail-restore` verifies and extracts an archive and can run quarantine
+reconciliation. `wickmail-monitor` checks spool depth and age, disk usage,
+certificate expiry, authentication failures, policy-service failures, and
+reconciliation results, then alerts through journald and an optional webhook.
+See [docs/ops](../docs/ops/README.md).
+
+### Integration tests
+
+`nix flake check` runs:
+
+- `nix/tests/mail-path.nix` starts Postfix, Rspamd, Dovecot, and
+  wickmail-server together and verifies active delivery to `Inbox`, expiry
+  routing to `Aliases/Expired`, unknown and disabled rejection at RCPT, a
+  temporary failure while the policy service is down, and stripping of
+  spoofed `X-Wickmail-*` headers.
+- `nix/tests/backup-restore.nix` backs up a running system, simulates loss,
+  restores it, and verifies reconciliation repairs the mail store.
+- `nix/tests/abuse-controls.nix` verifies the message-size and rate limits,
+  open-relay rejection, outbound rate limiting, and disk-full behavior.

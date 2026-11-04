@@ -54,6 +54,7 @@ CI runs `nix flake check` on pull requests and on `main`.
 - [Mail server](docs/design/mail-server.md)
 - [Web management app](docs/design/web-app.md)
 - [Android WebView shell](docs/design/android.md)
+- [Operations guides](docs/ops/README.md): deployment, backups, monitoring, deliverability, abuse controls, and the release checklist
 - [Architecture decision records](docs/decisions/README.md)
 
 ## License
