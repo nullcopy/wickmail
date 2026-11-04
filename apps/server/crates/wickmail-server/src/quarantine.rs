@@ -660,6 +660,68 @@ impl<'a> QuarantineManager<'a> {
         Ok(entries)
     }
 
+    fn eligible_all(&self) -> Result<Vec<QuarantineMetadata>, QuarantineError> {
+        let mut entries: Vec<QuarantineMetadata> = self
+            .store
+            .list_quarantine_metadata()?
+            .into_iter()
+            .filter(|metadata| metadata.status == QuarantineStatus::Quarantined)
+            .collect();
+        entries.sort_by(|left, right| {
+            left.received_at
+                .cmp(&right.received_at)
+                .then(left.message_id.cmp(&right.message_id))
+        });
+        Ok(entries)
+    }
+
+    /// Enforces per-alias quarantine count and byte quotas.
+    ///
+    /// The oldest eligible messages for an over-quota alias are deleted first.
+    /// Messages in `recovering` or `deleting` are never deleted. Returns the
+    /// number of messages deleted.
+    pub fn enforce_quotas(
+        &self,
+        per_alias_count: Option<usize>,
+        per_alias_bytes: Option<u64>,
+    ) -> Result<usize, QuarantineError> {
+        if per_alias_count.is_none() && per_alias_bytes.is_none() {
+            return Ok(0);
+        }
+        let mut by_alias: HashMap<AliasId, Vec<QuarantineMetadata>> = HashMap::new();
+        for metadata in self.eligible_all()? {
+            for alias_id in &metadata.alias_ids {
+                by_alias
+                    .entry(*alias_id)
+                    .or_default()
+                    .push(metadata.clone());
+            }
+        }
+
+        let mut deleted = 0;
+        for (_, mut entries) in by_alias {
+            entries.sort_by(|left, right| {
+                left.received_at
+                    .cmp(&right.received_at)
+                    .then(left.message_id.cmp(&right.message_id))
+            });
+            let mut count = entries.len();
+            let mut bytes: u64 = entries.iter().map(|entry| entry.size_bytes).sum();
+            for metadata in entries {
+                let over_count = per_alias_count.is_some_and(|quota| count > quota);
+                let over_bytes = per_alias_bytes.is_some_and(|quota| bytes > quota);
+                if !over_count && !over_bytes {
+                    break;
+                }
+                self.delete_with(metadata.message_id, DeleteReason::Quota, &NoFaults)?;
+                deleted += 1;
+                count -= 1;
+                bytes = bytes.saturating_sub(metadata.size_bytes);
+            }
+        }
+        Ok(deleted)
+    }
+
     fn require(&self, message_id: MessageId) -> Result<QuarantineMetadata, QuarantineError> {
         self.store
             .get_quarantine_metadata(message_id)?

@@ -8,10 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::address::CanonicalAddress;
-use crate::alias::AliasId;
-use crate::api::{
-    ReplyContextResponse, ReplyIdentityDecision, ReplyIdentityOption, ReplyRequest, ReplyResponse,
-};
+use crate::api::{ReplyContextResponse, ReplyRequest, ReplyResponse};
 use crate::clock::SharedClock;
 use crate::mail::store::MailStoreAdapter;
 use crate::message::MessageId;
@@ -20,9 +17,8 @@ use crate::service::AliasService;
 use super::ReplyError;
 use super::context::fetch_reply_context;
 use super::dkim::DkimSigner;
-use super::outbound::{ComposeReply, compose_reply};
 use super::queue::OutboundQueue;
-use super::submission::{SubmitOutbound, submit_outbound};
+use super::submission::{SubmitOutbound, submit_outbound, submit_reply};
 
 /// The reply test client and CLI backend.
 pub struct ReplyClient {
@@ -79,39 +75,16 @@ impl ReplyClient {
         message_id: MessageId,
         request: &ReplyRequest,
     ) -> Result<ReplyResponse, ReplyError> {
-        let context = self
-            .fetch_reply_context(message_id)?
-            .ok_or(ReplyError::MessageNotFound(message_id))?;
-        let identity = resolve_identity(&context.identity, request.alias_id)?;
-        let to = context.from.clone().ok_or(ReplyError::NoSender)?;
-
-        let now = self.clock.now();
-        let outbound_id = MessageId::new();
-        let raw = compose_reply(&ComposeReply {
-            identity: identity.clone(),
-            to: to.clone(),
-            subject: context.subject.clone(),
-            original_message_id: context.original_message_id.clone(),
-            body: request.body.clone(),
-            quoted_text: request.quoted_text.clone(),
-            message_id: outbound_id,
-            now,
-        });
-
         let service = self.service.lock().expect("alias service lock poisoned");
-        submit_outbound(
+        submit_reply(
             &service,
+            &self.mail,
             self.queue.as_ref(),
             self.dkim.as_ref(),
-            self.primary.as_slice(),
-            SubmitOutbound {
-                identity,
-                raw,
-                recipients: vec![to],
-                envelope_sender: None,
-                message_id: Some(outbound_id),
-            },
-            now,
+            self.primary.as_ref(),
+            message_id,
+            request,
+            self.clock.now(),
         )
     }
 
@@ -130,31 +103,13 @@ impl ReplyClient {
     }
 }
 
-fn resolve_identity(
-    decision: &ReplyIdentityDecision,
-    requested: Option<AliasId>,
-) -> Result<ReplyIdentityOption, ReplyError> {
-    match requested {
-        Some(alias_id) => decision
-            .options
-            .iter()
-            .find(|option| option.alias_id() == Some(alias_id))
-            .cloned()
-            .ok_or(ReplyError::IdentityNotAllowed),
-        None => decision
-            .selected
-            .clone()
-            .ok_or(ReplyError::IdentityRequired),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::resolve_identity;
     use crate::address::CanonicalAddress;
     use crate::alias::AliasId;
     use crate::api::{ReplyIdentityDecision, ReplyIdentityOption, ReplyIdentitySelection};
     use crate::reply::ReplyError;
+    use crate::reply::resolve_reply_identity as resolve_identity;
 
     const ID_A: &str = "018f9b60-0000-7000-8000-00000000000a";
     const ID_B: &str = "018f9b60-0000-7000-8000-00000000000b";

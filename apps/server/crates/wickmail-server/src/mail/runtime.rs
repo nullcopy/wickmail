@@ -5,6 +5,7 @@
 //! by the policy lookup and the delivery path through a mutex.
 
 use std::io;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,10 +13,12 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::abuse::{AbusePolicy, AlertKind, Alerter, LogAlerter, RateLimiter};
 use crate::address::{CanonicalAddress, Domain};
 use crate::clock::{SharedClock, SystemClock};
 use crate::db::{Store, StoreError};
 use crate::generator::AliasGenerator;
+use crate::http::{AppState, HttpConfig, serve_http};
 use crate::mail::delivery::{PlannedDelivery, plan};
 use crate::mail::headers::{MessageParts, WICKMAIL_HEADER_PREFIX};
 use crate::mail::lmtp::{
@@ -29,6 +32,7 @@ use crate::mail::store::MailStoreAdapter;
 use crate::mail::submission::{SUBMISSION_SOCKETMAP_NAME, SubmissionPolicy};
 use crate::message::{Message, Route};
 use crate::quarantine::{QuarantineError, QuarantineManager, RetentionPolicy};
+use crate::reply::{DkimSigner, FileOutboundQueue};
 use crate::service::AliasService;
 
 /// Runtime configuration for the inbound mail path.
@@ -64,6 +68,20 @@ pub struct ServerConfig {
     pub retention: RetentionPolicy,
     /// How often reconciliation and retention run.
     pub maintenance_interval: Duration,
+    /// Address the management API listens on, when enabled.
+    pub http_listen: Option<SocketAddr>,
+    /// Directory holding the built web assets, served from the API origin.
+    pub web_root: Option<PathBuf>,
+    /// Directory the management API queues outbound replies into.
+    pub outbound_dir: Option<PathBuf>,
+    /// Inbound abuse policy.
+    pub abuse: AbusePolicy,
+    /// Whether the management session cookie carries `Secure`.
+    pub cookie_secure: bool,
+    /// PEM-encoded DKIM key for outbound replies.
+    pub dkim_key: Option<PathBuf>,
+    /// DKIM selector for outbound replies.
+    pub dkim_selector: String,
 }
 
 impl ServerConfig {
@@ -93,6 +111,13 @@ impl ServerConfig {
             quarantine_dir: None,
             retention: RetentionPolicy::default(),
             maintenance_interval: Duration::from_secs(60),
+            http_listen: None,
+            web_root: None,
+            outbound_dir: None,
+            abuse: AbusePolicy::default(),
+            cookie_secure: true,
+            dkim_key: None,
+            dkim_selector: "wickmail".to_string(),
         }
     }
 }
@@ -109,6 +134,9 @@ pub enum RuntimeError {
     /// A socket could not be bound.
     #[error(transparent)]
     Io(#[from] io::Error),
+    /// The runtime configuration is incomplete or invalid.
+    #[error("configuration error: {0}")]
+    Config(String),
 }
 
 /// Operational counters for the inbound mail path.
@@ -166,9 +194,12 @@ pub struct MailPath {
     service: Arc<Mutex<AliasService>>,
     primary: CanonicalAddress,
     clock: SharedClock,
-    adapter: Option<MailStoreAdapter>,
+    adapter: Option<Arc<MailStoreAdapter>>,
     retention: RetentionPolicy,
     metrics: MailMetrics,
+    abuse: AbusePolicy,
+    limiter: Arc<RateLimiter>,
+    alerter: Arc<dyn Alerter>,
 }
 
 impl MailPath {
@@ -191,13 +222,37 @@ impl MailPath {
             adapter: None,
             retention: RetentionPolicy::default(),
             metrics: MailMetrics::default(),
+            abuse: AbusePolicy::default(),
+            limiter: Arc::new(RateLimiter::new()),
+            alerter: Arc::new(LogAlerter),
         }
     }
 
     /// Enables quarantine reconciliation and retention over the mail store.
     pub fn enable_maintenance(&mut self, adapter: MailStoreAdapter, retention: RetentionPolicy) {
+        self.enable_maintenance_with(Arc::new(adapter), retention);
+    }
+
+    /// Enables maintenance over a shared mail-store adapter.
+    pub fn enable_maintenance_with(
+        &mut self,
+        adapter: Arc<MailStoreAdapter>,
+        retention: RetentionPolicy,
+    ) {
         self.adapter = Some(adapter);
         self.retention = retention;
+    }
+
+    /// Applies the inbound abuse policy, rate limiter, and alert sink.
+    pub fn with_abuse(
+        &mut self,
+        abuse: AbusePolicy,
+        limiter: Arc<RateLimiter>,
+        alerter: Arc<dyn Alerter>,
+    ) {
+        self.abuse = abuse;
+        self.limiter = limiter;
+        self.alerter = alerter;
     }
 
     /// The durable spool.
@@ -246,12 +301,65 @@ impl MailPath {
                 retention.deleted, retention.purged,
             );
         }
+        let quotas = manager.enforce_quotas(
+            self.abuse.per_alias_quarantine_count,
+            self.abuse.per_alias_quarantine_bytes,
+        )?;
+        if quotas > 0 {
+            self.alerter.alert(
+                AlertKind::QuotaExceeded,
+                &format!("deleted {quotas} over-quota quarantined messages"),
+            );
+        }
         Ok(())
     }
 
     /// Evaluates an envelope, annotates it with trusted headers, and spools it.
     pub fn process(&self, envelope: Envelope) -> Vec<RecipientReply> {
         let count = envelope.recipients.len();
+
+        if self.abuse.rejects_size(envelope.data.len()) {
+            self.alerter.alert(
+                AlertKind::QuotaExceeded,
+                "inbound message exceeds the maximum size",
+            );
+            return vec![
+                RecipientReply {
+                    code: 552,
+                    text: "5.3.4 message too big".to_string(),
+                };
+                count
+            ];
+        }
+        if let Some(limit) = self.abuse.per_sender
+            && let Err(limited) = self
+                .limiter
+                .check(&envelope.sender, limit, self.clock.now())
+        {
+            self.alerter
+                .alert(AlertKind::RateLimited, "per-sender rate limit reached");
+            return vec![
+                RecipientReply::temporary(format!(
+                    "4.7.1 rate limited, retry in {}s",
+                    limited.retry_after_seconds
+                ));
+                count
+            ];
+        }
+        if let Some(limit) = self.abuse.global
+            && let Err(limited) = self.limiter.check_global(limit, self.clock.now())
+        {
+            self.alerter
+                .alert(AlertKind::RateLimited, "global rate limit reached");
+            return vec![
+                RecipientReply::temporary(format!(
+                    "4.7.1 rate limited, retry in {}s",
+                    limited.retry_after_seconds
+                ));
+                count
+            ];
+        }
+
         let mut parsed = Vec::new();
         let mut unparseable = false;
         for raw in &envelope.recipients {
@@ -326,6 +434,16 @@ impl MailPath {
                         .spool_unavailable
                         .fetch_add(1, Ordering::Relaxed);
                 }
+                let disk_full =
+                    matches!(&error, SpoolError::Io(io) if crate::abuse::is_disk_full(io));
+                self.alerter.alert(
+                    if disk_full {
+                        AlertKind::DiskFull
+                    } else {
+                        AlertKind::SpoolFailure
+                    },
+                    &error.to_string(),
+                );
                 eprintln!("wickmail: spool unavailable: {error}");
                 vec![RecipientReply::temporary("4.3.0 spool unavailable"); count]
             }
@@ -380,6 +498,27 @@ impl MailPath {
                     if let Ok(service) = self.service.lock() {
                         if let Err(error) = service.record_delivery(&message) {
                             eprintln!("wickmail: provenance recording failed: {error}");
+                        }
+                        if let Some(adapter) = &self.adapter {
+                            let manager = QuarantineManager::new(
+                                service.store(),
+                                adapter.as_ref(),
+                                self.retention,
+                                self.clock.clone(),
+                            );
+                            match manager.enforce_quotas(
+                                self.abuse.per_alias_quarantine_count,
+                                self.abuse.per_alias_quarantine_bytes,
+                            ) {
+                                Ok(deleted) if deleted > 0 => self.alerter.alert(
+                                    AlertKind::QuotaExceeded,
+                                    &format!("deleted {deleted} over-quota quarantined messages"),
+                                ),
+                                Ok(_) => {}
+                                Err(error) => {
+                                    eprintln!("wickmail: quota enforcement failed: {error}");
+                                }
+                            }
                         }
                     }
                 }
@@ -438,6 +577,60 @@ fn annotate(
         .push("X-Wickmail-Received-At", received_at.to_string());
 }
 
+/// Starts the management API on its own thread.
+fn start_http(
+    config: &ServerConfig,
+    listen: SocketAddr,
+    service: Arc<Mutex<AliasService>>,
+    adapter: Option<Arc<MailStoreAdapter>>,
+) -> Result<(), RuntimeError> {
+    let mail = adapter
+        .ok_or_else(|| RuntimeError::Config("--http-listen requires --maildir".to_string()))?;
+    let outbound_dir = config
+        .outbound_dir
+        .clone()
+        .ok_or_else(|| RuntimeError::Config("--http-listen requires --outbound-dir".to_string()))?;
+    let queue = Arc::new(
+        FileOutboundQueue::open(&outbound_dir)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+    );
+
+    let mut http_config = HttpConfig::new(config.domain.clone(), Some(config.primary.clone()));
+    http_config.web_root = config.web_root.clone();
+    http_config.cookie_secure = config.cookie_secure;
+
+    let mut state = AppState::new(
+        service,
+        mail,
+        queue,
+        http_config,
+        Arc::new(SystemClock) as SharedClock,
+    );
+    if let Some(key) = &config.dkim_key {
+        let pem = std::fs::read_to_string(key).map_err(|error| {
+            RuntimeError::Config(format!("cannot read DKIM key {}: {error}", key.display()))
+        })?;
+        let signer =
+            DkimSigner::from_pem(config.domain.clone(), config.dkim_selector.clone(), &pem)
+                .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        state = state.with_dkim(Arc::new(signer));
+    }
+
+    #[cfg(feature = "passkeys")]
+    {
+        if let Ok(webauthn) = crate::http::build_webauthn(&state.config) {
+            state = state.with_webauthn(Arc::new(webauthn));
+        }
+    }
+
+    std::thread::spawn(move || {
+        if let Err(error) = serve_http(state, listen) {
+            eprintln!("wickmail: management API failed: {error}");
+        }
+    });
+    Ok(())
+}
+
 /// Starts the inbound mail path and blocks until the process is stopped.
 pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
     let mut store = Store::open(&config.db_path)?;
@@ -451,6 +644,7 @@ pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
         )
         .with_retention(config.retention),
     ));
+    let http_service = service.clone();
     let policy = Arc::new(RecipientPolicy::new(
         config.primary.clone(),
         service.clone(),
@@ -488,14 +682,26 @@ pub fn serve(config: ServerConfig) -> Result<(), RuntimeError> {
         config.primary.clone(),
         Arc::new(SystemClock) as SharedClock,
     );
-    if let Some(maildir) = &config.maildir {
-        let adapter = match &config.quarantine_dir {
+    let adapter = config.maildir.as_ref().map(|maildir| {
+        Arc::new(match &config.quarantine_dir {
             Some(quarantine_dir) => MailStoreAdapter::with_quarantine(maildir, quarantine_dir),
             None => MailStoreAdapter::open(maildir),
-        };
-        path.enable_maintenance(adapter, config.retention);
+        })
+    });
+    if let Some(adapter) = &adapter {
+        path.enable_maintenance_with(adapter.clone(), config.retention);
     }
+    path.with_abuse(
+        config.abuse,
+        Arc::new(RateLimiter::new()),
+        Arc::new(LogAlerter),
+    );
     let path = Arc::new(path);
+
+    if let Some(listen) = config.http_listen {
+        start_http(&config, listen, http_service, adapter)?;
+        eprintln!("wickmail: management API listening on {listen}");
+    }
 
     let policy_listener = socketmap::bind(&config.policy_socket)?;
     {

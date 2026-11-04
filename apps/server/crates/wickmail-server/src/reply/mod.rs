@@ -29,7 +29,7 @@ pub use queue::{
     FileOutboundQueue, MemoryOutboundQueue, OutboundMessage, OutboundMeta, OutboundQueue,
     QueueError,
 };
-pub use submission::{SubmitOutbound, submit_outbound};
+pub use submission::{SubmitOutbound, resolve_reply_identity, submit_outbound, submit_reply};
 
 use thiserror::Error;
 

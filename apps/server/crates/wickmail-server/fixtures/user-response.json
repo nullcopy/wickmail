@@ -1,0 +1,8 @@
+{
+  "id": "018f9b60-0000-7000-8000-0000000000c0",
+  "username": "owner",
+  "primaryAddress": "user@example.com",
+  "createdAt": "2026-01-01T00:00:00Z",
+  "setupCompleted": true,
+  "passwordChangedAt": "2026-01-01T00:00:00Z"
+}

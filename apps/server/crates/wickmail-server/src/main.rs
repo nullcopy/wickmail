@@ -5,14 +5,17 @@
 //! creation, spool inspection, and mail-store reads.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use time::Duration;
+use wickmail_server::abuse::{AbusePolicy, RateLimit};
 use wickmail_server::address::{CanonicalAddress, Domain};
 use wickmail_server::api::ReplyRequest;
 use wickmail_server::clock::SystemClock;
 use wickmail_server::generator::AliasGenerator;
+use wickmail_server::identity::IdentityService;
 use wickmail_server::mail::{MailStoreAdapter, ServerConfig, Spool, serve};
 use wickmail_server::message::MessageId;
 use wickmail_server::quarantine::{DeleteReason, QuarantineManager, RetentionPolicy};
@@ -32,6 +35,11 @@ fn main() -> ExitCode {
         }
         "migrate" => run_migrate(&parsed),
         "serve" => run_serve(&parsed),
+        "bootstrap" => run_bootstrap(&parsed),
+        "set-password" => run_set_password(&parsed),
+        "reset-password" => run_reset_password(&parsed),
+        "recovery-codes" => run_recovery_codes(&parsed),
+        "mail-credential" => run_mail_credential(&parsed),
         "create-alias" => run_create_alias(&parsed),
         "spool-stats" => run_spool_stats(&parsed),
         "mail-store" => run_mail_store(&parsed),
@@ -61,6 +69,132 @@ fn run_migrate(args: &Args) -> Result<(), String> {
     let schema_version = store.schema_version().map_err(store_error)?;
     println!("schema version: {schema_version}");
     Ok(())
+}
+
+/// Creates the single user and prints a single-use setup token.
+///
+/// This is the only way to create credentials: there are no defaults, and the
+/// command runs locally against the database file.
+fn run_bootstrap(args: &Args) -> Result<(), String> {
+    let db_path = args.required("db")?;
+    let primary = args.required("primary")?;
+    let username = args.get("username").unwrap_or_else(|| primary.clone());
+    let mut store = Store::open(&db_path).map_err(store_error)?;
+    store.migrate().map_err(store_error)?;
+    let identity = IdentityService::new(&store, Arc::new(SystemClock));
+    let (user, token) = identity
+        .bootstrap(username, primary)
+        .map_err(|error| error.to_string())?;
+    println!("user: {}", user.id);
+    println!("setup token: {token}");
+    println!("This token is single-use and expires in 24 hours.");
+    println!("Complete setup with `set-password`, or POST it to /v1/setup.");
+    Ok(())
+}
+
+/// Completes first-run setup from the host with the setup token.
+fn run_set_password(args: &Args) -> Result<(), String> {
+    let db_path = args.required("db")?;
+    let token = args.required("setup-token")?;
+    let password = password_arg(args)?;
+    let mut store = Store::open(&db_path).map_err(store_error)?;
+    store.migrate().map_err(store_error)?;
+    let identity = IdentityService::new(&store, Arc::new(SystemClock));
+    let user = identity
+        .complete_setup(&token, &password)
+        .map_err(|error| error.to_string())?;
+    println!("setup complete for {}", user.id);
+    Ok(())
+}
+
+/// Resets the management password from the host and revokes all sessions.
+fn run_reset_password(args: &Args) -> Result<(), String> {
+    let db_path = args.required("db")?;
+    let password = password_arg(args)?;
+    let mut store = Store::open(&db_path).map_err(store_error)?;
+    store.migrate().map_err(store_error)?;
+    let identity = IdentityService::new(&store, Arc::new(SystemClock));
+    let user = identity
+        .reset_password(&password)
+        .map_err(|error| error.to_string())?;
+    println!("password reset for {}; existing sessions revoked", user.id);
+    Ok(())
+}
+
+/// Generates one-time recovery codes, replacing unused ones.
+fn run_recovery_codes(args: &Args) -> Result<(), String> {
+    let db_path = args.required("db")?;
+    let mut store = Store::open(&db_path).map_err(store_error)?;
+    store.migrate().map_err(store_error)?;
+    let identity = IdentityService::new(&store, Arc::new(SystemClock));
+    let codes = identity
+        .rotate_recovery_codes()
+        .map_err(|error| error.to_string())?;
+    println!("one-time recovery codes (shown once):");
+    for code in codes {
+        println!("{code}");
+    }
+    Ok(())
+}
+
+/// Shows, rotates, or revokes the separate Dovecot mail credential.
+fn run_mail_credential(args: &Args) -> Result<(), String> {
+    let subcommand = args
+        .positional
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| "usage: mail-credential show|rotate|revoke --db <path>".to_string())?;
+    let db_path = args.required("db")?;
+    let mut store = Store::open(&db_path).map_err(store_error)?;
+    store.migrate().map_err(store_error)?;
+    let identity = IdentityService::new(&store, Arc::new(SystemClock));
+    match subcommand {
+        "show" => match identity
+            .mail_credential()
+            .map_err(|error| error.to_string())?
+        {
+            Some(credential) => println!(
+                "configured={} rotated_at={:?} revoked_at={:?}",
+                credential.is_configured(),
+                credential.rotated_at,
+                credential.revoked_at
+            ),
+            None => println!("no mail credential configured"),
+        },
+        "rotate" => {
+            let password = args
+                .get("password")
+                .unwrap_or_else(|| wickmail_server::identity::random_secret(18));
+            identity
+                .rotate_mail_credential(&password)
+                .map_err(|error| error.to_string())?;
+            println!("mail password: {password}");
+            println!("Update Dovecot with this password; it is shown once.");
+        }
+        "revoke" => {
+            identity
+                .revoke_mail_credential()
+                .map_err(|error| error.to_string())?;
+            println!("mail credential revoked");
+        }
+        other => return Err(format!("unknown mail-credential subcommand: {other}")),
+    }
+    Ok(())
+}
+
+/// Reads a password from `--password` or standard input.
+fn password_arg(args: &Args) -> Result<String, String> {
+    if let Some(value) = args.get("password") {
+        return Ok(value);
+    }
+    if args.flag("password-stdin") {
+        let mut buffer = String::new();
+        std::io::stdin()
+            .read_line(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        return Ok(buffer.trim_end_matches(['\r', '\n']).to_string());
+    }
+    Err("provide --password or --password-stdin".to_string())
 }
 
 fn run_serve(args: &Args) -> Result<(), String> {
@@ -111,7 +245,67 @@ fn run_serve(args: &Args) -> Result<(), String> {
                 .map_err(|_| "--maintenance-interval must be an integer".to_string())?,
         );
     }
+    if let Some(listen) = args.get("http-listen") {
+        config.http_listen = Some(
+            listen
+                .parse::<SocketAddr>()
+                .map_err(|_| "--http-listen must be host:port".to_string())?,
+        );
+    }
+    if let Some(root) = args.get("web-root") {
+        config.web_root = Some(root.into());
+    }
+    if let Some(dir) = args.get("outbound-dir") {
+        config.outbound_dir = Some(dir.into());
+    }
+    if args.flag("cookie-insecure") {
+        config.cookie_secure = false;
+    }
+    config.abuse = abuse_from_args(args)?;
+    if let Some(key) = args.get("dkim-key") {
+        config.dkim_key = Some(key.into());
+    }
+    if let Some(selector) = args.get("dkim-selector") {
+        config.dkim_selector = selector;
+    }
     serve(config).map_err(|error| error.to_string())
+}
+
+/// Builds an inbound abuse policy from CLI options.
+fn abuse_from_args(args: &Args) -> Result<AbusePolicy, String> {
+    let mut policy = AbusePolicy::default();
+    if let Some(bytes) = args.get("max-message-bytes") {
+        policy.max_message_bytes = bytes
+            .parse()
+            .map_err(|_| "--max-message-bytes must be an integer".to_string())?;
+    }
+    if let Some(rate) = args.get("per-sender-rate") {
+        policy.per_sender =
+            Some(RateLimit::per_hour(rate.parse().map_err(|_| {
+                "--per-sender-rate must be an integer".to_string()
+            })?));
+    }
+    if let Some(rate) = args.get("global-rate") {
+        policy.global =
+            Some(RateLimit::per_hour(rate.parse().map_err(|_| {
+                "--global-rate must be an integer".to_string()
+            })?));
+    }
+    if let Some(count) = args.get("per-alias-count") {
+        policy.per_alias_quarantine_count = Some(
+            count
+                .parse()
+                .map_err(|_| "--per-alias-count must be an integer".to_string())?,
+        );
+    }
+    if let Some(bytes) = args.get("per-alias-bytes") {
+        policy.per_alias_quarantine_bytes = Some(
+            bytes
+                .parse()
+                .map_err(|_| "--per-alias-bytes must be an integer".to_string())?,
+        );
+    }
+    Ok(policy)
 }
 
 /// Builds a retention policy from `--lease-retention-days` style options.
