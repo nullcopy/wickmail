@@ -1,0 +1,23 @@
+# Nix and Nix-managed files are formatted by nixfmt, not Prettier.
+flake.nix
+flake.lock
+nix/
+
+# Prose, metadata, and repository documentation.
+LICENSE
+README.md
+docs/
+*.md
+.gitignore
+.github/
+
+# Build output.
+node_modules/
+dist/
+build/
+target/
+.svelte-kit/
+result
+
+# Generated lockfiles.
+package-lock.json
