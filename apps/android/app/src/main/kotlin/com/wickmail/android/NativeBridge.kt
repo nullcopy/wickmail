@@ -98,7 +98,6 @@ internal class NativeBridge(
                 putExtra(Intent.EXTRA_TEXT, text)
             }
         val chooser = Intent.createChooser(send, context.getString(R.string.share_via))
-        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(chooser)
     }
 
