@@ -358,6 +358,40 @@ mod tests {
     }
 
     #[test]
+    fn rejects_two_from_headers() {
+        let raw = b"From: green.farm@example.com\r\nFrom: other@example.net\r\nTo: sender@example.net\r\n\r\nbody";
+        let result = enforce_outbound_identity(
+            raw,
+            &EnforceOptions {
+                sender_address: &CanonicalAddress::parse("green.farm@example.com").unwrap(),
+                envelope_sender: None,
+                primary_addresses: &[],
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(super::ReplyError::IdentityRejected(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_a_sender_that_is_not_the_alias() {
+        let raw = b"From: green.farm@example.com\r\nSender: other@example.net\r\nTo: sender@example.net\r\n\r\nbody";
+        let result = enforce_outbound_identity(
+            raw,
+            &EnforceOptions {
+                sender_address: &CanonicalAddress::parse("green.farm@example.com").unwrap(),
+                envelope_sender: None,
+                primary_addresses: &[],
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(super::ReplyError::IdentityRejected(_))
+        ));
+    }
+
+    #[test]
     fn rejects_a_mismatched_envelope_sender() {
         let raw = b"From: green.farm@example.com\r\nTo: sender@example.net\r\n\r\nbody";
         let result = enforce_outbound_identity(

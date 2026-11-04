@@ -16,6 +16,10 @@ use crate::message::Provenance;
 /// `aliases` are the owned aliases named by provenance, in provenance order,
 /// with any alias that no longer resolves already removed. `primary` is the
 /// account's primary address when one is configured.
+///
+/// The prompt decision follows trusted provenance, not just the aliases that
+/// still resolve: when more than one alias received the message the user must
+/// choose, even if only one of them is still resolvable.
 pub fn select_reply_identity(
     provenance: &Provenance,
     aliases: &[Alias],
@@ -32,8 +36,12 @@ pub fn select_reply_identity(
         address: address.clone(),
     });
 
+    // Provenance records every alias the envelope named, deduplicated at
+    // acceptance. More than one means the user must choose.
+    let multiple_received = provenance.alias_ids.len() > 1;
+
     if alias_options.is_empty() {
-        if provenance.primary_received {
+        if provenance.primary_received && !multiple_received {
             if let Some(primary) = primary_option {
                 return ReplyIdentityDecision {
                     selection: ReplyIdentitySelection::Default,
@@ -49,16 +57,18 @@ pub fn select_reply_identity(
         };
     }
 
-    if let [alias] = alias_options.as_slice() {
-        let mut options = vec![alias.clone()];
-        if let Some(primary) = primary_option {
-            options.push(primary);
+    if !multiple_received {
+        if let [alias] = alias_options.as_slice() {
+            let mut options = vec![alias.clone()];
+            if let Some(primary) = primary_option {
+                options.push(primary);
+            }
+            return ReplyIdentityDecision {
+                selection: ReplyIdentitySelection::Default,
+                selected: Some(alias.clone()),
+                options,
+            };
         }
-        return ReplyIdentityDecision {
-            selection: ReplyIdentitySelection::Default,
-            selected: Some(alias.clone()),
-            options,
-        };
     }
 
     let mut options = alias_options;
@@ -183,6 +193,24 @@ mod tests {
         assert_eq!(decision.selection, ReplyIdentitySelection::Prompt);
         assert_eq!(decision.selected, None);
         assert_eq!(decision.options.len(), 3);
+    }
+
+    #[test]
+    fn multiple_received_prompts_even_when_one_alias_no_longer_resolves() {
+        // Two aliases received the message, but only one still resolves. The
+        // provenance still says multiple aliases, so the server must prompt.
+        let first = alias(ID_A, "green.farm@example.com");
+        let decision = select_reply_identity(
+            &Provenance {
+                alias_ids: vec![first.id, AliasId::from_uuid(ID_B.parse().unwrap())],
+                primary_received: true,
+            },
+            std::slice::from_ref(&first),
+            Some(&primary()),
+        );
+        assert_eq!(decision.selection, ReplyIdentitySelection::Prompt);
+        assert_eq!(decision.selected, None);
+        assert_eq!(decision.options.len(), 2);
     }
 
     #[test]

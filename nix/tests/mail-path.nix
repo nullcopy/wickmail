@@ -271,6 +271,47 @@ let
         "--db", DB, "--maildir", MAILDIR, "--quarantine-dir", QUARANTINE,
     )
 
+    step("Dovecot unavailable holds mail in the spool without bouncing")
+    run("systemctl", "stop", "dovecot.service")
+    time.sleep(2)
+    code, text, data_code = smtp(
+        active_addr,
+        "From: sender@example.net\r\nTo: " + active_addr
+        + "\r\nSubject: dovecot-down\r\n\r\nheld\r\n",
+    )
+    assert code == 250, f"RCPT while Dovecot is down: {code} {text}"
+    assert data_code == 250, f"Dovecot down should be accepted and spooled, got {data_code}"
+    # The failure is recorded in the journal so an operator alert can fire.
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        journal = run("journalctl", "-u", "wickmail.service", "--no-pager")
+        if "forwarding" in journal:
+            break
+        time.sleep(0.5)
+    else:
+        raise AssertionError("the held message was not reported in the journal")
+    run("systemctl", "start", "dovecot.service")
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        status = subprocess.run(
+            ["systemctl", "is-active", "dovecot.service"], capture_output=True, text=True
+        ).stdout.strip()
+        if status == "active":
+            break
+        time.sleep(0.5)
+    else:
+        raise AssertionError("dovecot.service did not restart")
+    # The spooled message is delivered once Dovecot returns, with no bounce.
+    wait_for_inbox(4)
+    client = imap()
+    try:
+        client.select("Inbox")
+        status, data = client.search(None, "FROM", "MAILER-DAEMON")
+        assert status == "OK"
+        assert data[0].split() == [], "a bounce was delivered for a held message"
+    finally:
+        client.logout()
+
     step("all checks passed")
   '';
 in

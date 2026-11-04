@@ -87,6 +87,15 @@ impl Fixture {
             .unwrap();
         service
             .create_with_address(
+                address("blue.sky@example.com"),
+                CreateAlias {
+                    expiry: ExpiryChoice::LeaseSeconds(None),
+                    ..CreateAlias::default()
+                },
+            )
+            .unwrap();
+        service
+            .create_with_address(
                 address("old.farm@example.com"),
                 CreateAlias {
                     expiry: ExpiryChoice::Absolute(at("2026-01-02T00:00:00Z")),
@@ -143,9 +152,11 @@ impl Fixture {
     }
 
     fn send(&self, recipient: &str, data: &[u8]) {
-        self.ingress
-            .deliver("sender@example.com", recipient, data)
-            .unwrap();
+        self.send_from("sender@example.com", recipient, data);
+    }
+
+    fn send_from(&self, sender: &str, recipient: &str, data: &[u8]) {
+        self.ingress.deliver(sender, recipient, data).unwrap();
         self.path.forward_pending().unwrap();
     }
 
@@ -290,6 +301,9 @@ fn full_spool_returns_a_temporary_failure() {
     });
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].code, 451);
+    // Spool exhaustion raises the alert counter.
+    assert_eq!(path.metrics().spool_full, 1);
+    assert_eq!(path.metrics().accepted, 0);
 }
 
 #[test]
@@ -361,12 +375,15 @@ fn spool_worker_retries_until_dovecot_is_available() {
     });
     assert_eq!(replies[0].code, 250);
     assert_eq!(spool.stats().unwrap().depth, 1);
+    assert_eq!(path.metrics().accepted, 1);
 
     // The first forward fails because Dovecot is not running yet.
     assert_eq!(path.forward_pending().unwrap(), 0);
     assert_eq!(spool.stats().unwrap().depth, 1);
     let attempts = spool.entries().unwrap()[0].meta.attempts;
     assert_eq!(attempts, 1);
+    // The message stays in the spool; the failure is counted, not bounced.
+    assert_eq!(path.metrics().forwarding_failures, 1);
 
     // Start Dovecot and retry: the message is delivered and the spool drains.
     let dovecot = Arc::new(Mutex::new(Vec::new()));
@@ -380,6 +397,243 @@ fn spool_worker_retries_until_dovecot_is_available() {
     assert_eq!(path.forward_pending().unwrap(), 1);
     assert_eq!(spool.stats().unwrap().depth, 0);
     assert_eq!(dovecot.lock().unwrap().len(), 1);
+    assert_eq!(path.metrics().delivered, 1);
+}
+
+fn envelope(recipient: &str, data: &[u8]) -> Envelope {
+    Envelope {
+        sender: "sender@example.com".to_string(),
+        recipients: vec![recipient.to_string()],
+        data: data.to_vec(),
+    }
+}
+
+#[test]
+fn policy_database_outage_at_rcpt_is_temporary_not_unknown() {
+    let fixture = Fixture::new();
+    fixture
+        .service
+        .lock()
+        .unwrap()
+        .store()
+        .connection()
+        .execute_batch("ALTER TABLE aliases RENAME TO aliases_outage;")
+        .unwrap();
+
+    let policy = RecipientPolicy::new(address("user@example.com"), fixture.service.clone());
+    let decision = policy.decide("green.farm@example.com");
+    assert!(
+        matches!(decision, PolicyDecision::Temporary(_)),
+        "{decision:?}"
+    );
+    assert!(
+        !matches!(&decision, PolicyDecision::Reject(reason) if reason == "unknown recipient"),
+        "an internal failure was reported as an unknown recipient"
+    );
+}
+
+#[test]
+fn policy_database_outage_at_delivery_is_temporary_and_not_bounced() {
+    let fixture = Fixture::new();
+    fixture
+        .service
+        .lock()
+        .unwrap()
+        .store()
+        .connection()
+        .execute_batch("ALTER TABLE aliases RENAME TO aliases_outage;")
+        .unwrap();
+
+    let replies = fixture.path.process(envelope(
+        "green.farm@example.com",
+        b"Subject: x\r\n\r\nbody\r\n",
+    ));
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0].code, 451, "{replies:?}");
+    // Nothing was accepted, so nothing is forwarded or bounced.
+    assert!(fixture.delivered().is_empty());
+    assert_eq!(fixture.path.spool().stats().unwrap().depth, 0);
+    assert_eq!(fixture.path.metrics().policy_failures, 1);
+}
+
+#[test]
+fn an_unavailable_spool_returns_temporary_before_acceptance() {
+    let fixture = Fixture::new();
+    std::fs::remove_dir_all(fixture.path.spool().dir()).unwrap();
+
+    let replies = fixture.path.process(envelope(
+        "green.farm@example.com",
+        b"Subject: x\r\n\r\nbody\r\n",
+    ));
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0].code, 451, "{replies:?}");
+    assert!(fixture.delivered().is_empty());
+    assert_eq!(fixture.path.metrics().spool_unavailable, 1);
+    assert_eq!(fixture.path.metrics().spool_full, 0);
+}
+
+#[test]
+fn a_corrupt_spool_entry_does_not_block_later_deliveries() {
+    let fixture = Fixture::new();
+    assert_eq!(
+        fixture.path.process(envelope(
+            "green.farm@example.com",
+            b"Subject: one\r\n\r\nbody\r\n"
+        ))[0]
+            .code,
+        250
+    );
+    assert_eq!(
+        fixture.path.process(envelope(
+            "green.farm@example.com",
+            b"Subject: two\r\n\r\nbody\r\n"
+        ))[0]
+            .code,
+        250
+    );
+
+    let entries = fixture.path.spool().entries().unwrap();
+    assert_eq!(entries.len(), 2);
+    let corrupt = entries
+        .iter()
+        .find(|entry| entry.meta.subject == "one")
+        .unwrap()
+        .id;
+    std::fs::remove_file(fixture.path.spool().dir().join(format!("{corrupt}.eml"))).unwrap();
+
+    // The unreadable entry is skipped; the entry behind it still delivers.
+    assert_eq!(fixture.path.forward_pending().unwrap(), 1);
+    let delivered = fixture.delivered();
+    assert_eq!(delivered.len(), 1);
+    assert!(
+        String::from_utf8_lossy(&delivered[0].data).contains("Subject: two"),
+        "the later entry should have been delivered"
+    );
+    assert_eq!(fixture.path.spool().entries().unwrap().len(), 1);
+    assert_eq!(fixture.path.metrics().forwarding_failures, 1);
+}
+
+#[test]
+fn multiple_alias_provenance_records_every_receiving_alias() {
+    let fixture = Fixture::new();
+    let replies = fixture.path.process(Envelope {
+        sender: "sender@example.com".to_string(),
+        recipients: vec![
+            "user@example.com".to_string(),
+            "green.farm@example.com".to_string(),
+            "blue.sky@example.com".to_string(),
+        ],
+        data: b"From: sender@example.com\r\nSubject: both\r\n\r\nbody\r\n".to_vec(),
+    });
+    assert_eq!(replies.len(), 3);
+    assert!(replies.iter().all(|reply| reply.code == 250), "{replies:?}");
+    assert_eq!(fixture.path.forward_pending().unwrap(), 1);
+
+    let delivered = fixture.delivered();
+    assert_eq!(delivered.len(), 1);
+    let text = String::from_utf8_lossy(&delivered[0].data).to_string();
+    assert!(text.contains("X-Wickmail-Route: Inbox\r\n"), "{text}");
+    let alias_headers = text
+        .lines()
+        .filter(|line| line.starts_with("X-Wickmail-Alias-ID:"))
+        .count();
+    assert_eq!(alias_headers, 2, "{text}");
+
+    let message_id = header(&text, "X-Wickmail-Message-ID").unwrap();
+    let stored = fixture
+        .service
+        .lock()
+        .unwrap()
+        .store()
+        .get_message(message_id.parse().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.alias_ids.len(), 2);
+    assert!(stored.primary_received);
+}
+
+#[test]
+fn primary_only_delivery_uses_the_primary_identity() {
+    let fixture = Fixture::new();
+    let replies = fixture.path.process(envelope(
+        "user@example.com",
+        b"Subject: direct\r\n\r\nbody\r\n",
+    ));
+    assert_eq!(replies[0].code, 250);
+    assert_eq!(fixture.path.forward_pending().unwrap(), 1);
+
+    let delivered = fixture.delivered();
+    let text = String::from_utf8_lossy(&delivered[0].data).to_string();
+    assert!(text.contains("X-Wickmail-Route: Inbox\r\n"), "{text}");
+    assert!(!text.contains("X-Wickmail-Alias-ID:"), "{text}");
+
+    let message_id = header(&text, "X-Wickmail-Message-ID").unwrap();
+    let stored = fixture
+        .service
+        .lock()
+        .unwrap()
+        .store()
+        .get_message(message_id.parse().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(stored.alias_ids.is_empty());
+    assert!(stored.primary_received);
+}
+
+#[test]
+fn lookup_is_case_insensitive_and_plus_tags_do_not_match() {
+    let fixture = Fixture::new();
+    let policy = RecipientPolicy::new(address("user@example.com"), fixture.service.clone());
+    assert_eq!(
+        policy.decide("GREEN.FARM@Example.COM"),
+        PolicyDecision::Accept
+    );
+    assert!(matches!(
+        policy.decide("green.farm+orders@example.com"),
+        PolicyDecision::Reject(_)
+    ));
+
+    let replies = fixture.path.process(envelope(
+        "GREEN.FARM@Example.COM",
+        b"Subject: case\r\n\r\nbody\r\n",
+    ));
+    assert_eq!(replies[0].code, 250);
+    assert_eq!(fixture.path.forward_pending().unwrap(), 1);
+    let text = String::from_utf8_lossy(&fixture.delivered()[0].data).to_string();
+    assert!(text.contains("X-Wickmail-Route: Inbox\r\n"), "{text}");
+    assert!(text.contains("X-Wickmail-Alias-ID:"), "{text}");
+}
+
+#[test]
+fn a_spoofed_inbound_mail_from_does_not_renew_the_alias() {
+    let fixture = Fixture::new();
+    let before = fixture
+        .service
+        .lock()
+        .unwrap()
+        .store()
+        .get_alias_by_address(&address("green.farm@example.com"))
+        .unwrap()
+        .unwrap();
+
+    // The envelope sender is the alias address itself; inbound mail records
+    // activity but never extends the lease.
+    fixture.send_from(
+        "green.farm@example.com",
+        "green.farm@example.com",
+        b"From: attacker@example.net\r\nSubject: spoof\r\n\r\nbody\r\n",
+    );
+
+    let after = fixture
+        .service
+        .lock()
+        .unwrap()
+        .store()
+        .get_alias_by_address(&address("green.farm@example.com"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.expires_at, before.expires_at);
+    assert_eq!(after.last_inbound_at, Some(at("2026-01-04T00:00:00Z")));
 }
 
 fn header<'a>(text: &'a str, name: &str) -> Option<&'a str> {
