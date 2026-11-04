@@ -14,3 +14,7 @@ export * from "./mail/route.js";
 export * from "./mail/sieve.js";
 export * from "./mail/spam.js";
 export * from "./mail/uuidv7.js";
+export * from "./mailstore/adapter.js";
+export * from "./mailstore/fake.js";
+export * from "./mailstore/filesystem.js";
+export * from "./provenance/repository.js";
