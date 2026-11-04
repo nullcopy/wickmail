@@ -7,7 +7,7 @@
 use thiserror::Error;
 use time::Duration;
 
-use crate::address::Domain;
+use crate::address::{CanonicalAddress, Domain};
 use crate::alias::{Alias, AliasId, DEFAULT_LEASE_SECONDS};
 use crate::api::{CreateAliasRequest, ExpiryRequest, UpdateAliasRequest};
 use crate::audit::{AuditDetail, AuditEvent, AuditEventKind};
@@ -18,7 +18,7 @@ use crate::lease::{
     LeaseError, ManualAction, OutboundDecision, apply_manual_action, apply_outbound,
     evaluate_state, record_inbound,
 };
-use crate::message::MessageId;
+use crate::message::{Message, MessageId};
 use crate::timestamp::Timestamp;
 
 /// Initial expiration choice for a new alias.
@@ -151,25 +151,15 @@ impl AliasService {
         &self.domain
     }
 
+    /// The current time from the service clock.
+    pub fn now(&self) -> Timestamp {
+        self.clock.now()
+    }
+
     /// Creates an alias with a generated, unique address.
     pub fn create(&self, request: CreateAlias) -> Result<Alias, ServiceError> {
         let now = self.clock.now();
-        let (lease_seconds, expires_at) = match request.expiry {
-            ExpiryChoice::LeaseSeconds(seconds) => {
-                let seconds = seconds.unwrap_or(DEFAULT_LEASE_SECONDS);
-                if seconds <= 0 {
-                    return Err(ServiceError::InvalidExpiry(
-                        "lease duration must be positive".to_string(),
-                    ));
-                }
-                let expires_at = now
-                    .checked_add(Duration::seconds(seconds))
-                    .ok_or_else(|| ServiceError::InvalidExpiry("lease overflows".to_string()))?;
-                (seconds, Some(expires_at))
-            }
-            ExpiryChoice::Absolute(expires_at) => (DEFAULT_LEASE_SECONDS, Some(expires_at)),
-            ExpiryChoice::Never => (DEFAULT_LEASE_SECONDS, None),
-        };
+        let (lease_seconds, expires_at) = self.resolve_expiry(&request, now)?;
 
         let mut store_error = None;
         let address = self.generator.generate(&self.domain, |candidate| {
@@ -185,7 +175,54 @@ impl AliasService {
             return Err(ServiceError::Store(error));
         }
         let address = address?;
+        self.insert_new(address, request, lease_seconds, expires_at, now)
+    }
 
+    /// Creates an alias at a caller-supplied address.
+    ///
+    /// Used by administrative tooling and tests that need a deterministic
+    /// address. The address must already be canonical and unused.
+    pub fn create_with_address(
+        &self,
+        address: CanonicalAddress,
+        request: CreateAlias,
+    ) -> Result<Alias, ServiceError> {
+        let now = self.clock.now();
+        let (lease_seconds, expires_at) = self.resolve_expiry(&request, now)?;
+        self.insert_new(address, request, lease_seconds, expires_at, now)
+    }
+
+    fn resolve_expiry(
+        &self,
+        request: &CreateAlias,
+        now: Timestamp,
+    ) -> Result<(i64, Option<Timestamp>), ServiceError> {
+        match request.expiry {
+            ExpiryChoice::LeaseSeconds(seconds) => {
+                let seconds = seconds.unwrap_or(DEFAULT_LEASE_SECONDS);
+                if seconds <= 0 {
+                    return Err(ServiceError::InvalidExpiry(
+                        "lease duration must be positive".to_string(),
+                    ));
+                }
+                let expires_at = now
+                    .checked_add(Duration::seconds(seconds))
+                    .ok_or_else(|| ServiceError::InvalidExpiry("lease overflows".to_string()))?;
+                Ok((seconds, Some(expires_at)))
+            }
+            ExpiryChoice::Absolute(expires_at) => Ok((DEFAULT_LEASE_SECONDS, Some(expires_at))),
+            ExpiryChoice::Never => Ok((DEFAULT_LEASE_SECONDS, None)),
+        }
+    }
+
+    fn insert_new(
+        &self,
+        address: CanonicalAddress,
+        request: CreateAlias,
+        lease_seconds: i64,
+        expires_at: Option<Timestamp>,
+        now: Timestamp,
+    ) -> Result<Alias, ServiceError> {
         let alias = Alias {
             id: AliasId::new(),
             address,
@@ -376,6 +413,15 @@ impl AliasService {
         alias.policy_version += 1;
         self.store.update_alias(&alias)?;
         Ok(alias)
+    }
+
+    /// Records an accepted inbound delivery and its trusted provenance.
+    ///
+    /// Writes the message metadata and advances `last_inbound_at` for every
+    /// receiving alias in one transaction. The lease is never modified.
+    pub fn record_delivery(&self, message: &Message) -> Result<(), ServiceError> {
+        self.store.record_inbound_delivery(message)?;
+        Ok(())
     }
 
     /// Records recovery of a quarantined message.

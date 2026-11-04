@@ -15,6 +15,7 @@ pub mod contract;
 pub mod db;
 pub mod generator;
 pub mod lease;
+pub mod mail;
 pub mod message;
 pub mod service;
 pub mod timestamp;
