@@ -334,6 +334,14 @@ pub fn kind_for_route(route: Route) -> Option<QuarantineKind> {
     }
 }
 
+/// Where a message currently lives, used to reconcile one metadata row.
+struct Membership<'a> {
+    mailbox: &'a str,
+    in_inbox: bool,
+    in_store: bool,
+    summary: Option<&'a MessageSummary>,
+}
+
 /// Drives quarantine recovery, reconciliation, and retention over one store
 /// and mail store.
 pub struct QuarantineManager<'a> {
@@ -496,6 +504,21 @@ impl<'a> QuarantineManager<'a> {
     /// both copies exist, a half-finished recovery returns to `quarantined`,
     /// and a half-finished deletion completes.
     pub fn reconcile(&self) -> Result<ReconciliationReport, QuarantineError> {
+        self.reconcile_inner(false)
+    }
+
+    /// Reconciliation that leaves `recovering` and `deleting` entries alone.
+    ///
+    /// Retention uses this so its pre-sweep repair never races an in-flight
+    /// recovery or deletion by moving it back to `quarantined`.
+    fn reconcile_preserving_in_flight(&self) -> Result<ReconciliationReport, QuarantineError> {
+        self.reconcile_inner(true)
+    }
+
+    fn reconcile_inner(
+        &self,
+        preserve_in_flight: bool,
+    ) -> Result<ReconciliationReport, QuarantineError> {
         let mut report = ReconciliationReport::default();
         let inbox = self.summaries(INBOX_MAILBOX)?;
         let quarantine = self.summaries(QUARANTINE_MAILBOX)?;
@@ -526,7 +549,17 @@ impl<'a> QuarantineManager<'a> {
                     spam.get(&metadata.message_id),
                 ),
             };
-            self.reconcile_entry(metadata, mailbox, in_inbox, in_store, summary, &mut report)?;
+            self.reconcile_entry(
+                metadata,
+                Membership {
+                    mailbox,
+                    in_inbox,
+                    in_store,
+                    summary,
+                },
+                preserve_in_flight,
+                &mut report,
+            )?;
         }
         Ok(report)
     }
@@ -546,7 +579,7 @@ impl<'a> QuarantineManager<'a> {
         faults: &dyn FaultInjector,
     ) -> Result<RetentionReport, QuarantineError> {
         let mut report = RetentionReport {
-            reconciled: self.reconcile()?,
+            reconciled: self.reconcile_preserving_in_flight()?,
             ..RetentionReport::default()
         };
         let now = self.now();
@@ -599,10 +632,13 @@ impl<'a> QuarantineManager<'a> {
         let mut report = ReconciliationReport::default();
         self.reconcile_entry(
             metadata,
-            mailbox,
-            in_inbox,
-            in_store,
-            summary.as_ref(),
+            Membership {
+                mailbox,
+                in_inbox,
+                in_store,
+                summary: summary.as_ref(),
+            },
+            false,
             &mut report,
         )
     }
@@ -645,12 +681,24 @@ impl<'a> QuarantineManager<'a> {
     fn reconcile_entry(
         &self,
         mut metadata: QuarantineMetadata,
-        mailbox: &str,
-        in_inbox: bool,
-        in_store: bool,
-        summary: Option<&MessageSummary>,
+        membership: Membership<'_>,
+        preserve_in_flight: bool,
         report: &mut ReconciliationReport,
     ) -> Result<(), QuarantineError> {
+        let Membership {
+            mailbox,
+            in_inbox,
+            in_store,
+            summary,
+        } = membership;
+        if preserve_in_flight
+            && matches!(
+                metadata.status,
+                QuarantineStatus::Recovering | QuarantineStatus::Deleting
+            )
+        {
+            return Ok(());
+        }
         match metadata.status {
             QuarantineStatus::Quarantined => {
                 if in_inbox && in_store {
