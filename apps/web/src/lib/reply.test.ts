@@ -65,8 +65,13 @@ test("multiple aliases require an explicit choice", () => {
 });
 
 test("replyErrorGuidance names identity errors and offers alternatives", () => {
-  const forbidden = replyErrorGuidance(new ApiError(403, "forbidden", "nope"));
+  const forbidden = replyErrorGuidance(new ApiError(403, "forbidden", "nope"), {
+    kind: "alias",
+    aliasId: "a1",
+    address: "green.farm@example.com",
+  });
   assert.match(forbidden.title, /Identity not allowed/);
+  assert.match(forbidden.detail, /green\.farm@example\.com/);
   const required = replyErrorGuidance(new ApiError(409, "identity_required", "choose"));
   assert.match(required.detail, /Choose the alias/);
   const offline = replyErrorGuidance(new ApiError(0, "network", "down"));

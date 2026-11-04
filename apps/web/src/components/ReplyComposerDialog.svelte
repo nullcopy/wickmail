@@ -113,7 +113,7 @@
       onSent?.(response);
     } catch (caught) {
       sendError = caught;
-      guidance = replyErrorGuidance(caught);
+      guidance = replyErrorGuidance(caught, findIdentity(context, selectedKey));
     } finally {
       busy = false;
     }

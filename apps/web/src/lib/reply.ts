@@ -74,7 +74,10 @@ export interface ReplyErrorGuidance {
 }
 
 /** Maps a failed reply to guidance that names the problem and next step. */
-export function replyErrorGuidance(error: unknown): ReplyErrorGuidance {
+export function replyErrorGuidance(
+  error: unknown,
+  rejected: ReplyIdentityOption | null = null,
+): ReplyErrorGuidance {
   if (!(error instanceof ApiError)) {
     return { title: "Reply not sent", detail: "The reply could not be sent. Try again." };
   }
@@ -94,8 +97,9 @@ export function replyErrorGuidance(error: unknown): ReplyErrorGuidance {
     case "forbidden":
       return {
         title: "Identity not allowed",
-        detail:
-          "The selected alias did not receive this message. Choose one of the offered identities and try again.",
+        detail: rejected
+          ? `The server rejected ${identityLabel(rejected)} for this message. Choose one of the offered identities and try again.`
+          : "The selected identity was rejected. Choose one of the offered identities and try again.",
       };
     case "reply_rejected":
       return {
