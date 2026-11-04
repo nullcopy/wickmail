@@ -378,6 +378,36 @@ impl AliasService {
         Ok(alias)
     }
 
+    /// Records recovery of a quarantined message.
+    ///
+    /// Recovery leaves the lease unchanged and counts as user activity.
+    pub fn record_recovery(
+        &self,
+        id: AliasId,
+        message_id: MessageId,
+    ) -> Result<Alias, ServiceError> {
+        let now = self.clock.now();
+        let mut alias = self
+            .store
+            .get_alias(id)?
+            .ok_or(ServiceError::NotFound(id))?;
+        alias.last_user_activity_at = Some(now);
+        alias.policy_version += 1;
+        self.store.update_alias(&alias)?;
+        self.record(
+            &alias,
+            AuditEventKind::Recovered,
+            Some(AuditDetail {
+                previous_expires_at: None,
+                expires_at: alias.expires_at,
+                lease_seconds: None,
+                message_id: Some(message_id),
+            }),
+            now,
+        )?;
+        Ok(alias)
+    }
+
     fn mutate<F>(&self, id: AliasId, action: F) -> Result<Alias, ServiceError>
     where
         F: FnOnce(&mut Alias, Timestamp) -> Result<Vec<AuditEventKind>, LeaseError>,
@@ -617,6 +647,30 @@ mod tests {
             .unwrap();
         assert_eq!(updated.last_inbound_at, Some(at("2026-01-04T00:00:00Z")));
         assert_eq!(updated.expires_at, Some(at("2026-01-11T00:00:00Z")));
+    }
+
+    #[test]
+    fn recovery_records_activity_and_an_event() {
+        let service = service_at("2026-01-04T00:00:00Z");
+        let alias = service.create(CreateAlias::default()).unwrap();
+        let expires = alias.expires_at;
+        let recovered = service.record_recovery(alias.id, MessageId::new()).unwrap();
+        assert_eq!(
+            recovered.last_user_activity_at,
+            Some(at("2026-01-04T00:00:00Z"))
+        );
+        assert_eq!(recovered.expires_at, expires);
+
+        let kinds: Vec<_> = service
+            .events(alias.id)
+            .unwrap()
+            .into_iter()
+            .map(|event| event.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![AuditEventKind::Created, AuditEventKind::Recovered]
+        );
     }
 
     #[test]
