@@ -1,10 +1,12 @@
 import { rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:net";
+import type { AlertSink } from "./abuse/disk.js";
+import type { SlidingWindowRateLimiter } from "./abuse/rateLimit.js";
 import type { MailPathConfig } from "./config.js";
 import type { SqliteDatabase } from "./db/database.js";
 import type { DeliveryTarget } from "./delivery/target.js";
-import { MailProxy } from "./lmtp/proxy.js";
+import { MailProxy, type InboundRateLimits } from "./lmtp/proxy.js";
 import { createLmtpServer } from "./lmtp/server.js";
 import { createRecipientPolicy, type RecipientPolicy } from "./policy/recipient.js";
 import { createSocketmapServer } from "./policy/socketmap.js";
@@ -32,6 +34,12 @@ export interface MailPathOptions {
   now?: () => number;
   /** The spool implementation. Defaults to a {@link FileSpool}. */
   spool?: Spool;
+  /** An inbound rate limiter, shared with the management API. */
+  rateLimiter?: SlidingWindowRateLimiter;
+  /** Inbound rate limits. Required for inbound rate limiting to apply. */
+  rateLimits?: InboundRateLimits;
+  /** Where operational alerts go. */
+  alerts?: AlertSink;
 }
 
 /**
@@ -56,6 +64,9 @@ export class MailPath {
       localDomains: config.localDomains,
       primaryAddresses: config.primaryAddresses,
       ...(options.now !== undefined ? { now: options.now } : {}),
+      ...(options.rateLimiter !== undefined ? { rateLimiter: options.rateLimiter } : {}),
+      ...(options.rateLimits !== undefined ? { rateLimits: options.rateLimits } : {}),
+      ...(options.alerts !== undefined ? { alerts: options.alerts } : {}),
     });
     this.worker = new SpoolWorker(this.spool, options.target, {
       ...(options.now !== undefined ? { now: options.now } : {}),

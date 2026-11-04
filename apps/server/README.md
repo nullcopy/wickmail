@@ -35,7 +35,7 @@ The inbound mail path (M2) is implemented on top of the alias core:
 - `src/mail` — header stripping, trusted headers, routing, and UUIDv7 IDs.
 - `src/mail-path.ts` — wiring for the whole path.
 
-The management API, quarantine recovery, and reply path are not implemented yet.
+The management API (M6) is implemented in `src/api`: Fastify routes for aliases, quarantine, and reply, cookie and scoped-token authentication, CSRF protection, idempotent mutations, and abuse controls. Authentication lives in `src/auth` (Argon2id passwords, revocable sessions, passkeys, recovery codes, a separate mail credential, and hashed API tokens), and the local admin CLI in `src/cli`. `src/server.ts` composes the API on top of the SQLite-backed alias, quarantine, and reply services.
 
 ## Installation note
 

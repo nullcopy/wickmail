@@ -1,5 +1,7 @@
 import type { AliasState, MailRoute } from "wickmail-core";
 import { wickmailHeader } from "wickmail-core";
+import { alertDiskFull, noopAlertSink, type AlertSink } from "../abuse/disk.js";
+import type { SlidingWindowRateLimiter } from "../abuse/rateLimit.js";
 import { canonicalizeAddress, splitCanonicalAddress } from "../alias/canonical.js";
 import { findAliasByAddress } from "../alias/repository.js";
 import type { SqliteDatabase } from "../db/database.js";
@@ -14,8 +16,19 @@ import { chooseRoute } from "../mail/route.js";
 import { isSpam } from "../mail/spam.js";
 import { uuidv7 } from "../mail/uuidv7.js";
 import { recordInboundAcceptance } from "../provenance/repository.js";
-import type { Spool } from "../spool/types.js";
+import { SpoolFullError, type Spool } from "../spool/types.js";
 import { toIsoTimestamp } from "../time.js";
+
+/** Inbound rate limits, expressed as messages per minute. */
+export interface InboundRateLimits {
+  /** Messages per minute across every sender. */
+  globalPerMinute: number;
+  /** Messages per minute from one envelope sender. */
+  perSenderPerMinute: number;
+}
+
+/** The rate-limit window for inbound messages. */
+const INBOUND_RATE_WINDOW_MS = 60_000;
 
 /** A message handed to the LMTP proxy. */
 export interface LmtpDeliveryInput {
@@ -53,6 +66,12 @@ export interface MailProxyOptions {
   now?: () => number;
   /** Generates the trusted message ID. Defaults to a UUIDv7. */
   generateMessageId?: (now: number) => string;
+  /** An inbound rate limiter. Rate limiting is skipped when absent. */
+  rateLimiter?: SlidingWindowRateLimiter;
+  /** Inbound rate limits. Required for rate limiting to apply. */
+  rateLimits?: InboundRateLimits;
+  /** Where operational alerts go. Defaults to discarding them. */
+  alerts?: AlertSink;
 }
 
 /**
@@ -68,6 +87,7 @@ export class MailProxy {
   private readonly primaryAddresses: ReadonlySet<string>;
   private readonly now: () => number;
   private readonly generateMessageId: (now: number) => string;
+  private readonly alerts: AlertSink;
 
   constructor(private readonly options: MailProxyOptions) {
     this.localDomains = new Set(options.localDomains.map((domain) => domain.trim().toLowerCase()));
@@ -76,11 +96,43 @@ export class MailProxy {
     );
     this.now = options.now ?? Date.now;
     this.generateMessageId = options.generateMessageId ?? ((at) => uuidv7(at));
+    this.alerts = options.alerts ?? noopAlertSink;
+  }
+
+  /** Apply the inbound rate limits, returning a temporary-failure reason when exceeded. */
+  private checkRateLimits(input: LmtpDeliveryInput): string | undefined {
+    const { rateLimiter, rateLimits } = this.options;
+    if (rateLimiter === undefined || rateLimits === undefined) {
+      return undefined;
+    }
+    const global = rateLimiter.check(
+      "inbound:global",
+      rateLimits.globalPerMinute,
+      INBOUND_RATE_WINDOW_MS,
+    );
+    if (!global.allowed) {
+      return "global inbound rate limit exceeded";
+    }
+    const sender = parsePathAddress(input.mailFrom).trim().toLowerCase() || "null";
+    const perSender = rateLimiter.check(
+      `inbound:sender:${sender}`,
+      rateLimits.perSenderPerMinute,
+      INBOUND_RATE_WINDOW_MS,
+    );
+    if (!perSender.allowed) {
+      return "sender inbound rate limit exceeded";
+    }
+    return undefined;
   }
 
   async deliver(input: LmtpDeliveryInput): Promise<LmtpDeliveryResult> {
     const receivedAt = input.receivedAt ?? this.now();
     const stripped = stripWickmailHeaders(input.data).raw;
+
+    const rateLimited = this.checkRateLimits(input);
+    if (rateLimited !== undefined) {
+      return { status: "tempfail", reason: rateLimited };
+    }
 
     const aliasIds: string[] = [];
     const aliasStates: AliasState[] = [];
@@ -144,6 +196,9 @@ export class MailProxy {
         raw,
       });
     } catch (error) {
+      if (error instanceof SpoolFullError) {
+        alertDiskFull(this.alerts, receivedAt, { messageId });
+      }
       return { status: "tempfail", reason: `spool unavailable: ${errorText(error)}` };
     }
 

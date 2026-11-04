@@ -1,4 +1,5 @@
 import type { ReplyIdentity } from "wickmail-core";
+import type { SlidingWindowRateLimiter } from "../abuse/rateLimit.js";
 import { canonicalizeAddress, splitCanonicalAddress } from "../alias/canonical.js";
 import { getAliasById, updateAlias, type AliasChanges } from "../alias/repository.js";
 import { recordAuditEvent } from "../audit/events.js";
@@ -49,7 +50,14 @@ export interface OutboundSubmissionDeps {
   signer?: DkimSigner;
   /** Generates the queue/message ID. Defaults to a UUIDv7. */
   generateMessageId?: (now: number) => string;
+  /** An outbound rate limiter. Rate limiting is skipped when absent. */
+  rateLimiter?: SlidingWindowRateLimiter;
+  /** Outbound submissions per minute. Required for rate limiting to apply. */
+  outboundPerMinute?: number;
 }
+
+/** The rate-limit window for outbound submissions. */
+const OUTBOUND_RATE_WINDOW_MS = 60_000;
 
 function tryCanonicalize(address: string): string | null {
   try {
@@ -80,6 +88,17 @@ export async function submitOutbound(
   deps: OutboundSubmissionDeps,
   input: SubmitOutboundInput,
 ): Promise<SubmitOutboundResult> {
+  if (deps.rateLimiter !== undefined && deps.outboundPerMinute !== undefined) {
+    const limited = deps.rateLimiter.check(
+      "outbound:global",
+      deps.outboundPerMinute,
+      OUTBOUND_RATE_WINDOW_MS,
+    );
+    if (!limited.allowed) {
+      return { status: "tempfail", reason: "outbound rate limit exceeded" };
+    }
+  }
+
   const alias =
     input.identity.kind === "alias" ? getAliasById(deps.db, input.identity.aliasId) : undefined;
   if (input.identity.kind === "alias" && alias === undefined) {
