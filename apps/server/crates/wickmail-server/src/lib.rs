@@ -17,6 +17,7 @@ pub mod generator;
 pub mod lease;
 pub mod mail;
 pub mod message;
+pub mod quarantine;
 pub mod service;
 pub mod timestamp;
 pub mod wordlist;
@@ -36,6 +37,12 @@ pub use lease::{
     evaluate_outbound, evaluate_state, record_inbound,
 };
 pub use message::{Message, MessageId, Provenance, ReplyIdentity, Route};
+pub use quarantine::{
+    DeleteReason, FaultInjector, FaultPoint, LEASE_QUARANTINE_RETENTION, METADATA_PURGE_GRACE,
+    NoFaults, QuarantineError, QuarantineKind, QuarantineManager, QuarantineMetadata,
+    QuarantineStatus, ReconciliationReport, RetentionLimits, RetentionPolicy, RetentionReport,
+    SPAM_RETENTION,
+};
 pub use service::{AliasService, CreateAlias, ExpiryChoice, OutboundOutcome, ServiceError};
 pub use timestamp::Timestamp;
 
