@@ -575,6 +575,7 @@ fn run_reply(args: &Args) -> Result<(), String> {
     };
     let request = ReplyRequest {
         alias_id,
+        primary: None,
         body: args.get("body").unwrap_or_default(),
         quoted_text: args.get("quote"),
     };

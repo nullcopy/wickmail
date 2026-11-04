@@ -140,6 +140,7 @@ pub fn fixtures() -> Vec<(&'static str, String)> {
             "reply-request.json",
             pretty(&ReplyRequest {
                 alias_id: Some(alias_id()),
+                primary: None,
                 body: "Thanks, that works.".to_string(),
                 quoted_text: Some("> Original message".to_string()),
             }),

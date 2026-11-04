@@ -3,12 +3,12 @@ import { test } from "node:test";
 
 import { ApiError } from "./errors.ts";
 import {
-  aliasIdFor,
   defaultIdentityKey,
   findIdentity,
   identityAlternatives,
   identityKey,
   identityLabel,
+  identitySelection,
   replyErrorGuidance,
   replySubject,
   requiresIdentityChoice,
@@ -31,8 +31,9 @@ test("identity keys and labels distinguish aliases from primary", () => {
   assert.equal(identityKey(alias), "alias:a1");
   assert.equal(identityKey(primary), "primary");
   assert.equal(identityLabel(primary), "user@example.com (primary)");
-  assert.equal(aliasIdFor(alias), "a1");
-  assert.equal(aliasIdFor(primary), null);
+  assert.deepEqual(identitySelection(alias), { aliasId: "a1", primary: null });
+  assert.deepEqual(identitySelection(primary), { aliasId: null, primary: true });
+  assert.deepEqual(identitySelection(null), { aliasId: null, primary: null });
 });
 
 test("a single alias defaults and offers the primary as an alternative", () => {

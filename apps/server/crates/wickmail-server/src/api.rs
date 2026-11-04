@@ -16,7 +16,7 @@ use crate::message::{Message, MessageId, Provenance, Route};
 use crate::timestamp::Timestamp;
 
 /// Version of the management API contract.
-pub const API_CONTRACT_VERSION: &str = "1.3.0";
+pub const API_CONTRACT_VERSION: &str = "1.4.0";
 
 /// Body of `POST /v1/aliases`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,13 +341,16 @@ pub struct ReplyContextResponse {
 
 /// Body of `POST /v1/messages/{id}/reply`.
 ///
-/// `alias_id` selects an owned alias that received the message; omitting it
-/// uses the default identity from provenance.
+/// `alias_id` selects an owned alias that received the message; `primary`
+/// selects the account's primary address. Omitting both uses the default
+/// identity from provenance. `primary` takes precedence when both are set.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplyRequest {
     /// Alias to send as, or `None` for the default identity.
     pub alias_id: Option<AliasId>,
+    /// Send as the account's primary address.
+    pub primary: Option<bool>,
     /// Message body.
     pub body: String,
     /// Optional quoted text.

@@ -177,6 +177,8 @@ export interface ReplyContext {
 export interface ReplyRequest {
   /** Alias to send as, or null for the default identity. */
   aliasId: string | null;
+  /** Send as the account's primary address. Takes precedence over `aliasId`. */
+  primary: boolean | null;
   body: string;
   quotedText: string | null;
 }

@@ -235,6 +235,7 @@ fn fetches_context_and_submits_a_signed_reply_as_the_alias() {
             message_id,
             &ReplyRequest {
                 alias_id: Some(alias.id),
+                primary: None,
                 body: "You're welcome.".to_string(),
                 quoted_text: Some("Thanks for your order.".to_string()),
             },
@@ -290,6 +291,7 @@ fn multiple_aliases_prompt_and_never_select_silently() {
         message_id,
         &ReplyRequest {
             alias_id: None,
+            primary: None,
             body: "hi".to_string(),
             quoted_text: None,
         },
@@ -302,6 +304,7 @@ fn multiple_aliases_prompt_and_never_select_silently() {
             message_id,
             &ReplyRequest {
                 alias_id: Some(second.id),
+                primary: None,
                 body: "hi".to_string(),
                 quoted_text: None,
             },
@@ -330,6 +333,7 @@ fn an_expired_alias_without_renewal_is_rejected() {
         message_id,
         &ReplyRequest {
             alias_id: Some(alias.id),
+            primary: None,
             body: "hi".to_string(),
             quoted_text: None,
         },
@@ -372,6 +376,7 @@ fn a_primary_only_message_uses_the_primary_identity() {
             message_id,
             &ReplyRequest {
                 alias_id: None,
+                primary: None,
                 body: "hi".to_string(),
                 quoted_text: None,
             },
@@ -381,6 +386,40 @@ fn a_primary_only_message_uses_the_primary_identity() {
     assert!(response.expires_at.is_none());
     let queued = harness.queue.get(response.message_id).unwrap().unwrap();
     assert_eq!(header(&queued.raw, "From").as_deref(), Some(PRIMARY));
+}
+
+#[test]
+fn a_primary_choice_overrides_the_alias_default() {
+    let harness = Harness::new();
+    let alias = harness.create_alias("green.farm@example.com", at("2026-01-05T00:00:00Z"), true);
+    let message_id = MessageId::new();
+    harness.deliver(
+        message_id,
+        &[alias.id],
+        false,
+        "From: sender@example.net\r\nSubject: Both\r\n\r\nbody\r\n",
+    );
+
+    let response = harness
+        .client
+        .submit_reply(
+            message_id,
+            &ReplyRequest {
+                alias_id: None,
+                primary: Some(true),
+                body: "hi".to_string(),
+                quoted_text: None,
+            },
+        )
+        .unwrap();
+    let queued = harness.queue.get(response.message_id).unwrap().unwrap();
+    assert_eq!(header(&queued.raw, "From").as_deref(), Some(PRIMARY));
+    // The primary identity does not renew the alias.
+    assert!(!response.renewed);
+    assert_eq!(
+        harness.stored_alias(alias.id).expires_at,
+        Some(at("2026-01-05T00:00:00Z"))
+    );
 }
 
 #[test]

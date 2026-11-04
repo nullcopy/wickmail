@@ -2,12 +2,12 @@
   import type { ReplyContext, ReplyResponse } from "@wickmail/core";
   import { session } from "../lib/session.svelte";
   import {
-    aliasIdFor,
     defaultIdentityKey,
     findIdentity,
     identityAlternatives,
     identityKey,
     identityLabel,
+    identitySelection,
     replyErrorGuidance,
     replySubject,
     requiresIdentityChoice,
@@ -105,7 +105,7 @@
     try {
       const option = findIdentity(context, selectedKey);
       const response = await session.client.sendReply(messageId, {
-        aliasId: aliasIdFor(option),
+        ...identitySelection(option),
         body,
         quotedText: includeQuote && quoted ? quote() : null,
       });

@@ -29,6 +29,16 @@ export function aliasIdFor(option: ReplyIdentityOption | null): string | null {
   return option?.kind === "alias" ? option.aliasId : null;
 }
 
+/** The request fields that select a sending identity. */
+export function identitySelection(option: ReplyIdentityOption | null): {
+  aliasId: string | null;
+  primary: boolean | null;
+} {
+  if (option?.kind === "alias") return { aliasId: option.aliasId, primary: null };
+  if (option?.kind === "primary") return { aliasId: null, primary: true };
+  return { aliasId: null, primary: null };
+}
+
 /** The default identity key, or null when the user must choose. */
 export function defaultIdentityKey(context: ReplyContext): string | null {
   return context.identity.selected ? identityKey(context.identity.selected) : null;

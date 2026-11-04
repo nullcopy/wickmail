@@ -282,6 +282,7 @@ const replyContext: Parser<ReplyContext> = object<ReplyContext>({
 
 const replyRequest: Parser<ReplyRequest> = object<ReplyRequest>({
   aliasId: nullable(string),
+  primary: nullable(boolean),
   body: string,
   quotedText: nullable(string),
 });
