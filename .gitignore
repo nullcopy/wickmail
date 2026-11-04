@@ -29,6 +29,8 @@ build/
 out/
 target/
 bin/
+result
+result-*
 *.exe
 *.test
 
