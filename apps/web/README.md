@@ -1,6 +1,6 @@
 # wickmail-web
 
-Responsive web management UI and focused reply composer for Wickmail, reused by the Android WebView shell.
+Responsive web management UI and focused reply composer for Wickmail, implemented in TypeScript with React and reused by the Android WebView shell.
 
 Scope:
 
@@ -11,6 +11,6 @@ Scope:
 - Reply-as-alias composer with provenance-based identity selection
 - Activity history and settings
 
-See [web management app design](../../docs/design/web-app.md).
+Consumes the Rust server's management API through the [wickmail-core](../../packages/core/README.md) client package. See [web management app design](../../docs/design/web-app.md) and [ADR 0012](../../docs/decisions/0012-rust-server-typescript-clients.md).
 
 Status: not implemented.

@@ -4,7 +4,7 @@ Deployment, mail server configuration, and operational tooling for Wickmail.
 
 Scope:
 
-- Nix flake deployment outputs: NixOS modules, packages, and container images
+- Nix flake deployment outputs: NixOS modules, packages, and container images, including the Rust `wickmail-server` binary
 - Postfix, Dovecot, and spam-filter configuration
 - DNS records: SPF, DKIM, DMARC, reverse DNS
 - TLS certificate management

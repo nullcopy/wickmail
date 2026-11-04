@@ -17,6 +17,7 @@ The motivating scenario is an online purchase: the companion app generates a rea
 - Expired mail is quarantined for 30 days by default; spam retention is configured separately.
 - The web app is responsive and runs both in browsers and inside the Android WebView.
 - A Nix flake is the canonical build, development, test, and deployment interface. See [ADR 0011](../decisions/0011-nix-flake-first-class.md).
+- The server is implemented in Rust; the web app is TypeScript with React; the Android shell is Kotlin. See [ADR 0012](../decisions/0012-rust-server-typescript-clients.md).
 - All timestamps are stored and evaluated in UTC.
 
 ## Non-goals for v1
@@ -29,13 +30,13 @@ The motivating scenario is an online purchase: the companion app generates a rea
 
 ## Naming
 
-| Item | Name |
-|---|---|
-| Product and repository | Wickmail |
-| Server and management API | `wickmail-server` |
-| Web management app | `wickmail-web` |
-| Android shell | `wickmail-android` |
-| Shared schemas and API client | `wickmail-core` |
+| Item | Name | Implementation |
+|---|---|---|
+| Product and repository | Wickmail | — |
+| Server and management API | `wickmail-server` | Rust |
+| Web management app | `wickmail-web` | TypeScript and React |
+| Android shell | `wickmail-android` | Kotlin |
+| Client schemas and API client | `wickmail-core` | TypeScript |
 
 ## Glossary
 
@@ -71,10 +72,10 @@ The motivating scenario is an online purchase: the companion app generates a rea
 ```text
 wickmail/
   flake.nix         # build, development, test, and deployment entry point
-  apps/server/      # policy lookup, LMTP proxy, management API
-  apps/web/         # responsive management UI and reply composer
-  apps/android/     # Android WebView shell
-  packages/core/    # shared schemas, types, and API client
+  apps/server/      # Rust policy lookup, LMTP proxy, management API
+  apps/web/         # TypeScript and React management UI and reply composer
+  apps/android/     # Kotlin Android WebView shell
+  packages/core/    # TypeScript client schemas, types, and API client
   infra/            # deployment, mail config, backup scripts
   docs/design/      # design specifications
   docs/decisions/   # architecture decision records

@@ -1,6 +1,6 @@
 # wickmail-server
 
-Policy lookup, LMTP proxy, lease engine, and management API for Wickmail.
+Policy lookup, LMTP proxy, lease engine, and management API for Wickmail, implemented in Rust.
 
 Scope:
 
@@ -13,6 +13,6 @@ Scope:
 - Management API used by the web and Android clients
 - Authentication, bootstrap, API tokens, and abuse controls
 
-See [mail server design](../../docs/design/mail-server.md) and the [architecture decision records](../../docs/decisions/README.md).
+Built with Cargo and packaged by the Nix flake. See [mail server design](../../docs/design/mail-server.md), [ADR 0012](../../docs/decisions/0012-rust-server-typescript-clients.md), and the [architecture decision records](../../docs/decisions/README.md).
 
 Status: not implemented.

@@ -68,7 +68,7 @@ Web/Android app ── HTTPS ──► Management API ──► Alias database
                                       └─► Outbound reply submission
 ```
 
-The management API, policy lookup, and LMTP proxy are one deployable application (`wickmail-server`) with logically separate interfaces. See [ADR 0006](../decisions/0006-mail-path-integration.md).
+The management API, policy lookup, and LMTP proxy are one deployable application (`wickmail-server`) with logically separate interfaces. It is implemented in Rust. See [ADR 0006](../decisions/0006-mail-path-integration.md) and [ADR 0012](../decisions/0012-rust-server-typescript-clients.md).
 
 ### Components
 
